@@ -6,6 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/deevus/pixels/internal/cache"
 	"github.com/deevus/pixels/internal/ssh"
 )
 
@@ -22,35 +23,43 @@ func runConsole(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	name := args[0]
 
-	client, err := connectClient(ctx)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-
-	instance, err := client.Virt.GetInstance(ctx, containerName(name))
-	if err != nil {
-		return fmt.Errorf("looking up %s: %w", name, err)
-	}
-	if instance == nil {
-		return fmt.Errorf("pixel %q not found", name)
+	// Try local cache first for fast path (already running).
+	var ip string
+	if cached := cache.Get(name); cached != nil && cached.IP != "" && cached.Status == "RUNNING" {
+		ip = cached.IP
 	}
 
-	if instance.Status != "RUNNING" {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Starting %s...\n", name)
-		if err := client.Virt.StartInstance(ctx, containerName(name)); err != nil {
-			return fmt.Errorf("starting instance: %w", err)
-		}
-		// Re-fetch to get updated aliases.
-		instance, err = client.Virt.GetInstance(ctx, containerName(name))
-		if err != nil {
-			return fmt.Errorf("refreshing instance: %w", err)
-		}
-	}
-
-	ip := resolveIP(instance)
 	if ip == "" {
-		return fmt.Errorf("no IP address for %s", name)
+		client, err := connectClient(ctx)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+
+		instance, err := client.Virt.GetInstance(ctx, containerName(name))
+		if err != nil {
+			return fmt.Errorf("looking up %s: %w", name, err)
+		}
+		if instance == nil {
+			return fmt.Errorf("pixel %q not found", name)
+		}
+
+		if instance.Status != "RUNNING" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Starting %s...\n", name)
+			if err := client.Virt.StartInstance(ctx, containerName(name)); err != nil {
+				return fmt.Errorf("starting instance: %w", err)
+			}
+			instance, err = client.Virt.GetInstance(ctx, containerName(name))
+			if err != nil {
+				return fmt.Errorf("refreshing instance: %w", err)
+			}
+		}
+
+		ip = resolveIP(instance)
+		if ip == "" {
+			return fmt.Errorf("no IP address for %s", name)
+		}
+		cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
 	}
 
 	if err := ssh.WaitReady(ctx, ip, 30*time.Second); err != nil {
