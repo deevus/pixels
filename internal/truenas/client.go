@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	truenas "github.com/deevus/truenas-go"
 	"github.com/deevus/truenas-go/client"
@@ -54,25 +55,103 @@ func (c *Client) Version() truenas.Version {
 	return c.version
 }
 
-// ContainerDataset returns the ZFS dataset path for a container by name.
-// It queries virt.global.config for the base dataset (e.g. "fast-as-fuk/.ix-virt")
-// and appends "/containers/<name>".
-func (c *Client) ContainerDataset(ctx context.Context, name string) (string, error) {
+type virtGlobalConfig struct {
+	Pool         string   `json:"pool"`
+	Dataset      string   `json:"dataset"`
+	StoragePools []string `json:"storage_pools"`
+}
+
+func (c *Client) getVirtGlobalConfig(ctx context.Context) (*virtGlobalConfig, error) {
 	result, err := c.ws.Call(ctx, "virt.global.config", nil)
 	if err != nil {
-		return "", fmt.Errorf("querying virt global config: %w", err)
+		return nil, fmt.Errorf("querying virt global config: %w", err)
 	}
-
-	var gcfg struct {
-		Dataset string `json:"dataset"`
-	}
+	var gcfg virtGlobalConfig
 	if err := json.Unmarshal(result, &gcfg); err != nil {
-		return "", fmt.Errorf("parsing virt global config: %w", err)
+		return nil, fmt.Errorf("parsing virt global config: %w", err)
+	}
+	return &gcfg, nil
+}
+
+// ContainerDataset returns the ZFS dataset path for a container by name.
+func (c *Client) ContainerDataset(ctx context.Context, name string) (string, error) {
+	gcfg, err := c.getVirtGlobalConfig(ctx)
+	if err != nil {
+		return "", err
 	}
 	if gcfg.Dataset == "" {
 		return "", fmt.Errorf("no dataset in virt global config")
 	}
 	return gcfg.Dataset + "/containers/" + name, nil
+}
+
+// ProvisionOpts contains options for provisioning a container.
+type ProvisionOpts struct {
+	SSHPubKey string
+	DNS       []string // nameservers (e.g. ["1.1.1.1", "8.8.8.8"])
+}
+
+// Provision writes SSH keys, rc.local for openssh-server install, and
+// optional DNS config into a running container's rootfs via file_receive.
+func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts) error {
+	gcfg, err := c.getVirtGlobalConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if gcfg.Pool == "" {
+		return fmt.Errorf("no pool in virt global config")
+	}
+	// Container rootfs on the TrueNAS host filesystem.
+	rootfs := fmt.Sprintf("/var/lib/incus/storage-pools/%s/containers/%s/rootfs", gcfg.Pool, name)
+
+	// Configure upstream DNS for systemd-resolved via drop-in.
+	// /etc/resolv.conf is a symlink managed by systemd-resolved, so we
+	// configure it through resolved.conf.d instead.
+	if len(opts.DNS) > 0 {
+		var conf strings.Builder
+		conf.WriteString("[Resolve]\nDNS=")
+		conf.WriteString(strings.Join(opts.DNS, " "))
+		conf.WriteString("\n")
+		dropinPath := rootfs + "/etc/systemd/resolved.conf.d/pixels-dns.conf"
+		if err := c.ws.WriteFile(ctx, dropinPath, truenas.WriteFileParams{
+			Content: []byte(conf.String()),
+			Mode:    0o644,
+		}); err != nil {
+			return fmt.Errorf("writing resolved drop-in: %w", err)
+		}
+	}
+
+	if opts.SSHPubKey == "" {
+		return nil
+	}
+
+	// Write authorized_keys.
+	// filesystem.mkdir blocks incus paths, but file_receive works and
+	// auto-creates parent directories.
+	sshDir := rootfs + "/root/.ssh"
+	if err := c.ws.WriteFile(ctx, sshDir+"/authorized_keys", truenas.WriteFileParams{
+		Content: []byte(opts.SSHPubKey + "\n"),
+		Mode:    0o600,
+	}); err != nil {
+		return fmt.Errorf("writing authorized_keys: %w", err)
+	}
+
+	// Write rc.local — systemd-rc-local-generator automatically creates and
+	// starts rc-local.service if /etc/rc.local exists and is executable.
+	rcLocal := `#!/bin/sh
+if [ ! -f /root/.ssh-provisioned ]; then
+    apt-get update -qq && apt-get install -y -qq openssh-server && systemctl enable --now ssh && touch /root/.ssh-provisioned
+fi
+exit 0
+`
+	if err := c.ws.WriteFile(ctx, rootfs+"/etc/rc.local", truenas.WriteFileParams{
+		Content: []byte(rcLocal),
+		Mode:    0o755,
+	}); err != nil {
+		return fmt.Errorf("writing rc.local: %w", err)
+	}
+
+	return nil
 }
 
 // NICOpts describes a NIC device to attach during container creation.
@@ -88,7 +167,7 @@ type CreateInstanceOpts struct {
 	CPU       string
 	Memory    int64 // bytes
 	Autostart bool
-	NIC       *NICOpts
+	NIC *NICOpts
 }
 
 // CreateInstance creates an Incus container via raw API call.
