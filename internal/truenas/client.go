@@ -1,0 +1,177 @@
+package truenas
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	truenas "github.com/deevus/truenas-go"
+	"github.com/deevus/truenas-go/client"
+
+	"github.com/deevus/pixels/internal/config"
+)
+
+// Client wraps a truenas-go WebSocket client and its services,
+// adding raw API call wrappers for methods not yet in truenas-go.
+type Client struct {
+	ws       *client.WebSocketClient
+	Virt     *truenas.VirtService
+	Snapshot *truenas.SnapshotService
+	version  truenas.Version
+}
+
+// Connect creates and connects a TrueNAS WebSocket client.
+func Connect(ctx context.Context, cfg *config.Config) (*Client, error) {
+	ws, err := client.NewWebSocketClient(client.WebSocketConfig{
+		Host:               cfg.TrueNAS.Host,
+		Port:               cfg.TrueNAS.Port,
+		Username:           cfg.TrueNAS.Username,
+		APIKey:             cfg.TrueNAS.APIKey,
+		InsecureSkipVerify: cfg.TrueNAS.InsecureSkipVerifyValue(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("creating client: %w", err)
+	}
+
+	if err := ws.Connect(ctx); err != nil {
+		return nil, fmt.Errorf("connecting to %s: %w", cfg.TrueNAS.Host, err)
+	}
+
+	v := ws.Version()
+	return &Client{
+		ws:       ws,
+		Virt:     truenas.NewVirtService(ws, v),
+		Snapshot: truenas.NewSnapshotService(ws, v),
+		version:  v,
+	}, nil
+}
+
+func (c *Client) Close() error {
+	return c.ws.Close()
+}
+
+func (c *Client) Version() truenas.Version {
+	return c.version
+}
+
+// ContainerDataset returns the ZFS dataset path for a container by name.
+// It queries virt.global.config for the base dataset (e.g. "fast-as-fuk/.ix-virt")
+// and appends "/containers/<name>".
+func (c *Client) ContainerDataset(ctx context.Context, name string) (string, error) {
+	result, err := c.ws.Call(ctx, "virt.global.config", nil)
+	if err != nil {
+		return "", fmt.Errorf("querying virt global config: %w", err)
+	}
+
+	var gcfg struct {
+		Dataset string `json:"dataset"`
+	}
+	if err := json.Unmarshal(result, &gcfg); err != nil {
+		return "", fmt.Errorf("parsing virt global config: %w", err)
+	}
+	if gcfg.Dataset == "" {
+		return "", fmt.Errorf("no dataset in virt global config")
+	}
+	return gcfg.Dataset + "/containers/" + name, nil
+}
+
+// NICOpts describes a NIC device to attach during container creation.
+type NICOpts struct {
+	NICType string // "macvlan" or "bridged"
+	Parent  string // host interface (e.g. "eno1")
+}
+
+// CreateInstanceOpts contains options for creating a container.
+type CreateInstanceOpts struct {
+	Name      string
+	Image     string
+	CPU       string
+	Memory    int64 // bytes
+	Autostart bool
+	NIC       *NICOpts
+}
+
+// CreateInstance creates an Incus container via raw API call.
+// This bypasses truenas-go's VirtDeviceOpts which sends empty strings
+// for null-able NIC fields (network), causing validation errors.
+func (c *Client) CreateInstance(ctx context.Context, opts CreateInstanceOpts) (*truenas.VirtInstance, error) {
+	params := map[string]any{
+		"name":          opts.Name,
+		"instance_type": "CONTAINER",
+		"image":         opts.Image,
+		"cpu":           opts.CPU,
+		"memory":        opts.Memory,
+		"autostart":     opts.Autostart,
+	}
+
+	if opts.NIC != nil {
+		nic := map[string]any{
+			"dev_type": "NIC",
+			"nic_type": opts.NIC.NICType,
+			"parent":   opts.NIC.Parent,
+		}
+		params["devices"] = []map[string]any{nic}
+	}
+
+	result, err := c.ws.CallAndWait(ctx, "virt.instance.create", []any{params})
+	if err != nil {
+		return nil, err
+	}
+
+	var instance truenas.VirtInstance
+	if err := json.Unmarshal(result, &instance); err != nil {
+		return nil, fmt.Errorf("parsing created instance: %w", err)
+	}
+	return &instance, nil
+}
+
+// ListInstances queries all Incus instances with the px- prefix.
+func (c *Client) ListInstances(ctx context.Context) ([]truenas.VirtInstance, error) {
+	result, err := c.ws.Call(ctx, "virt.instance.query", []any{
+		[][]any{{"name", "^", "px-"}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("querying instances: %w", err)
+	}
+
+	var instances []truenas.VirtInstance
+	if err := json.Unmarshal(result, &instances); err != nil {
+		return nil, fmt.Errorf("parsing instance list: %w", err)
+	}
+	return instances, nil
+}
+
+// ListSnapshots queries snapshots for the given ZFS dataset.
+func (c *Client) ListSnapshots(ctx context.Context, dataset string) ([]truenas.Snapshot, error) {
+	method := "zfs.snapshot.query"
+	if c.version.AtLeast(25, 10) {
+		method = "pool.snapshot.query"
+	}
+
+	result, err := c.ws.Call(ctx, method, []any{
+		[][]any{{"dataset", "=", dataset}},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("querying snapshots: %w", err)
+	}
+
+	var snapshots []truenas.Snapshot
+	if err := json.Unmarshal(result, &snapshots); err != nil {
+		return nil, fmt.Errorf("parsing snapshot list: %w", err)
+	}
+	return snapshots, nil
+}
+
+// SnapshotRollback rolls back to the given snapshot ID (dataset@name).
+func (c *Client) SnapshotRollback(ctx context.Context, snapshotID string) error {
+	method := "zfs.snapshot.rollback"
+	if c.version.AtLeast(25, 10) {
+		method = "pool.snapshot.rollback"
+	}
+
+	_, err := c.ws.Call(ctx, method, []any{snapshotID})
+	if err != nil {
+		return fmt.Errorf("rolling back snapshot %s: %w", snapshotID, err)
+	}
+	return nil
+}
