@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	truenas "github.com/deevus/truenas-go"
 	"github.com/spf13/cobra"
+
+	"github.com/deevus/pixels/internal/cache"
 )
 
 func init() {
@@ -62,10 +65,23 @@ func runDestroy(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if err := client.Virt.DeleteInstance(ctx, containerName(name)); err != nil {
-		return fmt.Errorf("deleting %s: %w", name, err)
+	// Retry delete — Incus sometimes needs a moment after stop for the
+	// storage volume to be fully released.
+	var deleteErr error
+	for i := range 3 {
+		if i > 0 {
+			time.Sleep(2 * time.Second)
+		}
+		deleteErr = client.Virt.DeleteInstance(ctx, containerName(name))
+		if deleteErr == nil {
+			break
+		}
+	}
+	if deleteErr != nil {
+		return fmt.Errorf("deleting %s: %w", name, deleteErr)
 	}
 
+	cache.Delete(name)
 	fmt.Fprintf(cmd.OutOrStdout(), "Destroyed %s\n", name)
 	return nil
 }

@@ -5,6 +5,8 @@ import (
 
 	truenas "github.com/deevus/truenas-go"
 	"github.com/spf13/cobra"
+
+	"github.com/deevus/pixels/internal/cache"
 )
 
 func init() {
@@ -32,6 +34,7 @@ func runStop(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("stopping %s: %w", name, err)
 	}
 
+	cache.Delete(name)
 	fmt.Fprintf(cmd.OutOrStdout(), "Stopped %s\n", name)
 	return nil
 }
