@@ -2,11 +2,14 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	truenas "github.com/deevus/truenas-go"
 	"github.com/spf13/cobra"
 
+	"github.com/deevus/pixels/internal/cache"
 	"github.com/deevus/pixels/internal/ssh"
 	tnc "github.com/deevus/pixels/internal/truenas"
 )
@@ -70,12 +73,43 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating instance: %w", err)
 	}
 
+	// Provision while the container is running (rootfs only mounted when up).
+	pubKey, _ := readSSHPubKey()
+	provOpts := tnc.ProvisionOpts{
+		SSHPubKey: pubKey,
+		DNS:       cfg.Defaults.DNS,
+	}
+	needsProvision := pubKey != "" || len(cfg.Defaults.DNS) > 0
+
+	if needsProvision {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Provisioning...\n")
+
+		if err := client.Provision(ctx, containerName(name), provOpts); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: provisioning failed: %v\n", err)
+		} else if pubKey != "" {
+			// Restart so systemd picks up rc.local on boot.
+			_ = client.Virt.StopInstance(ctx, containerName(name), truenas.StopVirtInstanceOpts{Timeout: 30})
+			if err := client.Virt.StartInstance(ctx, containerName(name)); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: restart after provision: %v\n", err)
+			}
+			// Refresh instance to get IP after restart.
+			instance, err = client.Virt.GetInstance(ctx, containerName(name))
+			if err != nil {
+				return fmt.Errorf("refreshing instance: %w", err)
+			}
+		}
+	}
+
 	ip := resolveIP(instance)
 	if ip != "" {
-		if err := ssh.WaitReady(ctx, ip, 30*time.Second); err != nil {
+		// Wait for the systemd service to install openssh-server.
+		if err := ssh.WaitReady(ctx, ip, 90*time.Second); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: SSH not ready: %v\n", err)
 		}
 	}
+
+	// Cache IP and status for fast exec/console lookups.
+	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
 
 	elapsed := time.Since(start).Truncate(100 * time.Millisecond)
 	fmt.Fprintf(cmd.OutOrStdout(), "Created %s in %s\n", containerName(name), elapsed)
@@ -84,4 +118,19 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "  SSH: ssh %s@%s\n", cfg.SSH.User, ip)
 	}
 	return nil
+}
+
+// readSSHPubKey reads the SSH public key from the path configured in ssh.key.
+// It derives the .pub path from the private key path.
+func readSSHPubKey() (string, error) {
+	keyPath := cfg.SSH.Key
+	if keyPath == "" {
+		return "", nil
+	}
+	pubPath := keyPath + ".pub"
+	data, err := os.ReadFile(pubPath)
+	if err != nil {
+		return "", fmt.Errorf("reading SSH public key %s: %w", pubPath, err)
+	}
+	return strings.TrimSpace(string(data)), nil
 }
