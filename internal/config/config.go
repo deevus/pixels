@@ -32,7 +32,8 @@ type Defaults struct {
 	Pool    string `toml:"pool"`
 	NICType string `toml:"nic_type"` // "macvlan" or "bridged"
 	Parent  string `toml:"parent"`   // parent interface (e.g. "eno1", "br0")
-	Network string `toml:"network"`  // Incus network name (e.g. "incusbr0")
+	Network string   `toml:"network"`  // Incus network name (e.g. "incusbr0")
+	DNS     []string `toml:"dns"`      // nameservers to write into containers
 }
 
 type SSH struct {
@@ -57,6 +58,7 @@ func Load() (*Config, error) {
 		},
 		SSH: SSH{
 			User: "root",
+			Key:  "~/.ssh/id_ed25519",
 		},
 	}
 
