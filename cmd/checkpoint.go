@@ -8,6 +8,7 @@ import (
 	truenas "github.com/deevus/truenas-go"
 	"github.com/spf13/cobra"
 
+	"github.com/deevus/pixels/internal/cache"
 	"github.com/deevus/pixels/internal/ssh"
 	tnc "github.com/deevus/pixels/internal/truenas"
 )
@@ -163,6 +164,7 @@ func runCheckpointRestore(cmd *cobra.Command, args []string) error {
 	}
 
 	ip := resolveIP(instance)
+	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
 	if ip != "" {
 		if err := ssh.WaitReady(ctx, ip, 30*time.Second); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: SSH not ready: %v\n", err)
