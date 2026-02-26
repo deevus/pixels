@@ -460,6 +460,40 @@ func (c *Client) ReplaceContainerRootfs(ctx context.Context, containerName, snap
 	return nil
 }
 
+// WriteAuthorizedKey writes an SSH public key to a running container's
+// authorized_keys files (root and pixel user) via the TrueNAS file_receive API.
+func (c *Client) WriteAuthorizedKey(ctx context.Context, name, sshPubKey string) error {
+	gcfg, err := c.Virt.GetGlobalConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if gcfg.Pool == "" {
+		return fmt.Errorf("no pool in virt global config")
+	}
+
+	rootfs := fmt.Sprintf("/var/lib/incus/storage-pools/%s/containers/%s/rootfs", gcfg.Pool, name)
+	keyData := []byte(sshPubKey + "\n")
+
+	if err := c.Filesystem.WriteFile(ctx, rootfs+"/root/.ssh/authorized_keys", truenas.WriteFileParams{
+		Content: keyData,
+		Mode:    0o600,
+	}); err != nil {
+		return fmt.Errorf("writing root authorized_keys: %w", err)
+	}
+
+	pixelUID := intPtr(1000)
+	if err := c.Filesystem.WriteFile(ctx, rootfs+"/home/pixel/.ssh/authorized_keys", truenas.WriteFileParams{
+		Content: keyData,
+		Mode:    0o600,
+		UID:     pixelUID,
+		GID:     pixelUID,
+	}); err != nil {
+		return fmt.Errorf("writing pixel authorized_keys: %w", err)
+	}
+
+	return nil
+}
+
 // isZFSPathChar returns true if the rune is valid in a ZFS dataset/snapshot path.
 func isZFSPathChar(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||

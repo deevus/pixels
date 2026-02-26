@@ -60,6 +60,11 @@ func runExec(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("waiting for SSH: %w", err)
 	}
 
+	// Verify key auth; if it fails, write this machine's key via TrueNAS.
+	if err := ensureSSHAuth(cmd, ctx, ip, name); err != nil {
+		return err
+	}
+
 	exitCode, err := ssh.Exec(ctx, ip, cfg.SSH.User, cfg.SSH.Key, command)
 	if err != nil {
 		return err

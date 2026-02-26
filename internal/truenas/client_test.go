@@ -600,3 +600,124 @@ func TestListSnapshots(t *testing.T) {
 		t.Errorf("unexpected filter: %v", calledFilters[0])
 	}
 }
+
+func TestWriteAuthorizedKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		pool       string
+		pubKey     string
+		configErr  error
+		writeErr   error
+		wantErr    bool
+		wantErrMsg string
+		wantCalls  int
+		check      func(t *testing.T, calls []writeCall)
+	}{
+		{
+			name:      "writes key to both root and pixel authorized_keys",
+			pool:      "tank",
+			pubKey:    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest user@newmachine",
+			wantCalls: 2,
+			check: func(t *testing.T, calls []writeCall) {
+				rootfs := "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs"
+
+				root := calls[0]
+				if root.path != rootfs+"/root/.ssh/authorized_keys" {
+					t.Errorf("root path = %q", root.path)
+				}
+				if !strings.Contains(root.content, "ssh-ed25519") {
+					t.Error("root authorized_keys missing key")
+				}
+				if root.mode != 0o600 {
+					t.Errorf("root mode = %o, want 600", root.mode)
+				}
+
+				pixel := calls[1]
+				if pixel.path != rootfs+"/home/pixel/.ssh/authorized_keys" {
+					t.Errorf("pixel path = %q", pixel.path)
+				}
+				if pixel.uid == nil || *pixel.uid != 1000 {
+					t.Errorf("pixel UID = %v, want 1000", pixel.uid)
+				}
+				if pixel.gid == nil || *pixel.gid != 1000 {
+					t.Errorf("pixel GID = %v, want 1000", pixel.gid)
+				}
+			},
+		},
+		{
+			name:      "global config error",
+			pubKey:    "ssh-ed25519 AAAA test@host",
+			configErr: errors.New("api failure"),
+			wantErr:   true,
+		},
+		{
+			name:       "empty pool",
+			pool:       "",
+			pubKey:     "ssh-ed25519 AAAA test@host",
+			wantErr:    true,
+			wantErrMsg: "no pool",
+		},
+		{
+			name:     "write error",
+			pool:     "tank",
+			pubKey:   "ssh-ed25519 AAAA test@host",
+			writeErr: errors.New("disk full"),
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls []writeCall
+
+			c := &Client{
+				Virt: &truenas.MockVirtService{
+					GetGlobalConfigFunc: func(ctx context.Context) (*truenas.VirtGlobalConfig, error) {
+						if tt.configErr != nil {
+							return nil, tt.configErr
+						}
+						return &truenas.VirtGlobalConfig{Pool: tt.pool}, nil
+					},
+				},
+				Filesystem: &truenas.MockFilesystemService{
+					WriteFileFunc: func(ctx context.Context, path string, params truenas.WriteFileParams) error {
+						if tt.writeErr != nil {
+							return tt.writeErr
+						}
+						calls = append(calls, writeCall{
+							path:    path,
+							content: string(params.Content),
+							mode:    uint32(params.Mode),
+							uid:     params.UID,
+							gid:     params.GID,
+						})
+						return nil
+					},
+				},
+			}
+
+			err := c.WriteAuthorizedKey(context.Background(), "px-test", tt.pubKey)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.wantErrMsg != "" && !strings.Contains(err.Error(), tt.wantErrMsg) {
+					t.Errorf("error %q should contain %q", err.Error(), tt.wantErrMsg)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if len(calls) != tt.wantCalls {
+				t.Fatalf("got %d WriteFile calls, want %d", len(calls), tt.wantCalls)
+			}
+
+			if tt.check != nil {
+				tt.check(t, calls)
+			}
+		})
+	}
+}

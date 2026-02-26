@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/deevus/pixels/internal/config"
+	"github.com/deevus/pixels/internal/ssh"
 	tnc "github.com/deevus/pixels/internal/truenas"
 )
 
@@ -84,6 +85,47 @@ func resolveIP(instance *truenas.VirtInstance) string {
 
 func newTabWriter(cmd *cobra.Command) *tabwriter.Writer {
 	return tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+}
+
+// readSSHPubKey reads the SSH public key from the path configured in ssh.key.
+// It derives the .pub path from the private key path.
+func readSSHPubKey() (string, error) {
+	keyPath := cfg.SSH.Key
+	if keyPath == "" {
+		return "", nil
+	}
+	pubPath := keyPath + ".pub"
+	data, err := os.ReadFile(pubPath)
+	if err != nil {
+		return "", fmt.Errorf("reading SSH public key %s: %w", pubPath, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// ensureSSHAuth tests key auth and, if it fails, writes the current machine's
+// SSH public key to the container's authorized_keys via TrueNAS.
+func ensureSSHAuth(cmd *cobra.Command, ctx context.Context, ip, name string) error {
+	if err := ssh.TestAuth(ctx, ip, cfg.SSH.User, cfg.SSH.Key); err == nil {
+		return nil
+	}
+
+	pubKey, err := readSSHPubKey()
+	if err != nil {
+		return err
+	}
+	if pubKey == "" {
+		return fmt.Errorf("SSH key auth failed and no public key configured")
+	}
+
+	fmt.Fprintf(cmd.ErrOrStderr(), "SSH key not authorized, updating...\n")
+
+	client, err := connectClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	return client.WriteAuthorizedKey(ctx, containerName(name), pubKey)
 }
 
 func formatBytes(b int64) string {

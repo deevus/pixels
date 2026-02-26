@@ -66,6 +66,11 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("waiting for SSH: %w", err)
 	}
 
+	// Verify key auth; if it fails, write this machine's key via TrueNAS.
+	if err := ensureSSHAuth(cmd, ctx, ip, name); err != nil {
+		return err
+	}
+
 	// Console replaces the process — does not return on success.
 	return ssh.Console(ip, cfg.SSH.User, cfg.SSH.Key)
 }

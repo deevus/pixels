@@ -90,10 +90,19 @@ func pollUntil(ctx context.Context, interval, timeout time.Duration, checkFn fun
 	}
 }
 
+// TestAuth runs a quick SSH connection test (ssh ... true) to verify
+// key-based authentication works. Returns nil on success.
+func TestAuth(ctx context.Context, host, user, keyPath string) error {
+	args := append(sshArgs(host, user, keyPath), "true")
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+	return cmd.Run()
+}
+
 func sshArgs(host, user, keyPath string) []string {
 	args := []string{
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "PasswordAuthentication=no",
 		"-o", "LogLevel=ERROR",
 	}
 	if keyPath != "" {
