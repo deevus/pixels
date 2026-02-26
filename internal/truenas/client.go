@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 
 	truenas "github.com/deevus/truenas-go"
@@ -15,10 +16,11 @@ import (
 // Client wraps a truenas-go WebSocket client and its services,
 // adding raw API call wrappers for methods not yet in truenas-go.
 type Client struct {
-	ws       *client.WebSocketClient
-	Virt     *truenas.VirtService
-	Snapshot *truenas.SnapshotService
-	version  truenas.Version
+	ws        client.Client
+	Virt      truenas.VirtServiceAPI
+	Snapshot  truenas.SnapshotServiceAPI
+	Interface truenas.InterfaceServiceAPI
+	version   truenas.Version
 }
 
 // Connect creates and connects a TrueNAS WebSocket client.
@@ -40,10 +42,11 @@ func Connect(ctx context.Context, cfg *config.Config) (*Client, error) {
 
 	v := ws.Version()
 	return &Client{
-		ws:       ws,
-		Virt:     truenas.NewVirtService(ws, v),
-		Snapshot: truenas.NewSnapshotService(ws, v),
-		version:  v,
+		ws:        ws,
+		Virt:      truenas.NewVirtService(ws, v),
+		Snapshot:  truenas.NewSnapshotService(ws, v),
+		Interface: truenas.NewInterfaceService(ws, v),
+		version:   v,
 	}, nil
 }
 
@@ -156,8 +159,89 @@ exit 0
 
 // NICOpts describes a NIC device to attach during container creation.
 type NICOpts struct {
-	NICType string // "macvlan" or "bridged"
+	NICType string // "MACVLAN" or "BRIDGED"
 	Parent  string // host interface (e.g. "eno1")
+}
+
+// DefaultNIC discovers the host's gateway interface and returns NIC options
+// suitable for container creation. It queries TrueNAS for the default IPv4
+// gateway, then finds the physical interface whose subnet contains that
+// gateway. Falls back to the first physical interface that is UP with an
+// IPv4 address.
+func (c *Client) DefaultNIC(ctx context.Context) (*NICOpts, error) {
+	ifaces, err := c.Interface.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing interfaces: %w", err)
+	}
+
+	// Filter to physical interfaces that are UP with an IPv4 address.
+	type candidate struct {
+		name    string
+		address string
+		netmask int
+	}
+	var candidates []candidate
+	for _, iface := range ifaces {
+		if iface.Type != truenas.InterfaceTypePhysical {
+			continue
+		}
+		if iface.State.LinkState != truenas.LinkStateUp {
+			continue
+		}
+		for _, alias := range iface.Aliases {
+			if alias.Type == truenas.AliasTypeINET {
+				candidates = append(candidates, candidate{
+					name:    iface.Name,
+					address: alias.Address,
+					netmask: alias.Netmask,
+				})
+				break
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no physical interface with IPv4 found")
+	}
+
+	// Try to match the default gateway to an interface subnet.
+	if gw := c.defaultGateway(ctx); gw != nil {
+		for _, cand := range candidates {
+			ip := net.ParseIP(cand.address)
+			if ip == nil {
+				continue
+			}
+			mask := net.CIDRMask(cand.netmask, 32)
+			network := &net.IPNet{IP: ip.Mask(mask), Mask: mask}
+			if network.Contains(gw) {
+				return &NICOpts{NICType: "MACVLAN", Parent: cand.name}, nil
+			}
+		}
+	}
+
+	// Fallback: first candidate.
+	return &NICOpts{NICType: "MACVLAN", Parent: candidates[0].name}, nil
+}
+
+// defaultGateway queries network.general.summary for the default IPv4 gateway.
+// Returns nil if the gateway cannot be determined.
+func (c *Client) defaultGateway(ctx context.Context) net.IP {
+	result, err := c.ws.Call(ctx, "network.general.summary", nil)
+	if err != nil {
+		return nil
+	}
+	var summary struct {
+		DefaultRoutes []string `json:"default_routes"`
+	}
+	if err := json.Unmarshal(result, &summary); err != nil {
+		return nil
+	}
+	for _, route := range summary.DefaultRoutes {
+		if ip := net.ParseIP(route); ip != nil && ip.To4() != nil {
+			return ip
+		}
+	}
+	return nil
 }
 
 // CreateInstanceOpts contains options for creating a container.

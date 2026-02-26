@@ -66,6 +66,15 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			NICType: strings.ToUpper(cfg.Defaults.NICType),
 			Parent:  cfg.Defaults.Parent,
 		}
+	} else {
+		// Auto-detect NIC from host's gateway interface.
+		nic, err := client.DefaultNIC(ctx)
+		if err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: NIC auto-detect failed: %v\n", err)
+		} else {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Auto-detected NIC: %s (%s)\n", nic.Parent, nic.NICType)
+			opts.NIC = nic
+		}
 	}
 
 	instance, err := client.CreateInstance(ctx, opts)
