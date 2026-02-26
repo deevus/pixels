@@ -36,7 +36,8 @@ internal/
 - Cache is populated after `create`/`start`/`checkpoint restore` and evicted on `stop`/`destroy`.
 - `console` and `exec` check the local cache first (fast path), falling back to the TrueNAS API.
 - Destroy retries 3 times with 2s delays to handle Incus storage release timing.
-- Checkpoint commands detect TrueNAS version for API compatibility (`zfs.snapshot.query` vs `pool.snapshot.query` in 25.10+).
+- NIC parent and type are auto-detected from the host's gateway interface when not configured explicitly.
+- `truenas` package fields use interfaces (`VirtServiceAPI`, `InterfaceServiceAPI`, etc.) for testability with library-provided mocks.
 
 ## Conventions
 
