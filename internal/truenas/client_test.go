@@ -207,13 +207,15 @@ func TestContainerDataset(t *testing.T) {
 	}
 }
 
-func TestProvision(t *testing.T) {
-	type writeCall struct {
-		path    string
-		content string
-		mode    uint32
-	}
+type writeCall struct {
+	path    string
+	content string
+	mode    uint32
+	uid     *int
+	gid     *int
+}
 
+func TestProvision(t *testing.T) {
 	tests := []struct {
 		name       string
 		opts       ProvisionOpts
@@ -223,7 +225,60 @@ func TestProvision(t *testing.T) {
 		wantCalls  int
 		wantErr    bool
 		wantErrMsg string
+		check      func(t *testing.T, calls []writeCall)
 	}{
+		{
+			name: "full provisioning with ssh, dns, env, devtools",
+			opts: ProvisionOpts{
+				SSHPubKey: "ssh-ed25519 AAAA test@host",
+				DNS:       []string{"1.1.1.1", "8.8.8.8"},
+				Env:       map[string]string{"ANTHROPIC_API_KEY": "sk-ant-123"},
+				DevTools:  true,
+			},
+			pool:      "tank",
+			wantCalls: 7, // dns + env + root key + pixel key + setup script + systemd unit + rc.local
+			check: func(t *testing.T, calls []writeCall) {
+				paths := make(map[string]writeCall)
+				for _, c := range calls {
+					paths[c.path] = c
+				}
+				rootfs := "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs"
+
+				// /etc/environment.
+				env := paths[rootfs+"/etc/environment"]
+				if !strings.Contains(env.content, "ANTHROPIC_API_KEY=") {
+					t.Errorf("/etc/environment missing API key: %s", env.content)
+				}
+
+				// Setup script.
+				setup := paths[rootfs+"/usr/local/bin/pixels-setup-devtools.sh"]
+				if setup.mode != 0o755 {
+					t.Errorf("setup script mode = %o, want 755", setup.mode)
+				}
+				for _, want := range []string{"mise", "npm install", "claude-code", "opencode", "su - pixel"} {
+					if !strings.Contains(setup.content, want) {
+						t.Errorf("setup script missing %q", want)
+					}
+				}
+
+				// Systemd unit.
+				unit := paths[rootfs+"/etc/systemd/system/pixels-devtools.service"]
+				if !strings.Contains(unit.content, "pixels-setup-devtools.sh") {
+					t.Errorf("systemd unit missing ExecStart: %s", unit.content)
+				}
+
+				// rc.local has devtools service start and pixel user.
+				rc := paths[rootfs+"/etc/rc.local"]
+				if !strings.Contains(rc.content, "pixels-devtools.service") {
+					t.Errorf("rc.local missing devtools service start: %s", rc.content)
+				}
+				for _, want := range []string{"set -e", "useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel", "NOPASSWD:ALL"} {
+					if !strings.Contains(rc.content, want) {
+						t.Errorf("rc.local missing %q", want)
+					}
+				}
+			},
+		},
 		{
 			name: "ssh key and dns",
 			opts: ProvisionOpts{
@@ -231,7 +286,21 @@ func TestProvision(t *testing.T) {
 				DNS:       []string{"1.1.1.1", "8.8.8.8"},
 			},
 			pool:      "tank",
-			wantCalls: 3, // dns + authorized_keys + rc.local
+			wantCalls: 4, // dns + root key + pixel key + rc.local
+			check: func(t *testing.T, calls []writeCall) {
+				// No devtools files should be written.
+				for _, c := range calls {
+					if strings.Contains(c.path, "pixels-setup-devtools") || strings.Contains(c.path, "pixels-devtools.service") {
+						t.Errorf("unexpected devtools file written: %s", c.path)
+					}
+				}
+				// rc.local should NOT contain devtools service start.
+				for _, c := range calls {
+					if strings.Contains(c.path, "rc.local") && strings.Contains(c.content, "pixels-devtools.service") {
+						t.Error("rc.local should not reference devtools service when devtools disabled")
+					}
+				}
+			},
 		},
 		{
 			name: "ssh key only",
@@ -239,7 +308,20 @@ func TestProvision(t *testing.T) {
 				SSHPubKey: "ssh-ed25519 AAAA test@host",
 			},
 			pool:      "tank",
-			wantCalls: 2, // authorized_keys + rc.local
+			wantCalls: 3, // root key + pixel key + rc.local
+		},
+		{
+			name: "env only, no ssh key",
+			opts: ProvisionOpts{
+				Env: map[string]string{"FOO": "bar"},
+			},
+			pool:      "tank",
+			wantCalls: 1, // /etc/environment only
+			check: func(t *testing.T, calls []writeCall) {
+				if !strings.Contains(calls[0].path, "/etc/environment") {
+					t.Errorf("expected /etc/environment, got %s", calls[0].path)
+				}
+			},
 		},
 		{
 			name: "no ssh key with dns",
@@ -299,6 +381,8 @@ func TestProvision(t *testing.T) {
 							path:    path,
 							content: string(params.Content),
 							mode:    uint32(params.Mode),
+							uid:     params.UID,
+							gid:     params.GID,
 						})
 						return nil
 					},
@@ -321,7 +405,15 @@ func TestProvision(t *testing.T) {
 			}
 
 			if len(calls) != tt.wantCalls {
+				for i, c := range calls {
+					t.Logf("  call[%d]: %s", i, c.path)
+				}
 				t.Fatalf("got %d WriteFile calls, want %d", len(calls), tt.wantCalls)
+			}
+
+			if tt.check != nil {
+				tt.check(t, calls)
+				return
 			}
 
 			if tt.wantCalls == 0 {
@@ -347,7 +439,7 @@ func TestProvision(t *testing.T) {
 				return
 			}
 
-			// Check authorized_keys.
+			// Check authorized_keys (root).
 			ak := calls[idx]
 			if ak.path != rootfs+"/root/.ssh/authorized_keys" {
 				t.Errorf("authorized_keys path = %q", ak.path)
@@ -357,6 +449,19 @@ func TestProvision(t *testing.T) {
 			}
 			if ak.mode != 0o600 {
 				t.Errorf("authorized_keys mode = %o, want 600", ak.mode)
+			}
+			idx++
+
+			// Check authorized_keys (pixel) — should have UID/GID 1000.
+			akPixel := calls[idx]
+			if akPixel.path != rootfs+"/home/pixel/.ssh/authorized_keys" {
+				t.Errorf("pixel authorized_keys path = %q", akPixel.path)
+			}
+			if akPixel.uid == nil || *akPixel.uid != 1000 {
+				t.Errorf("pixel authorized_keys UID = %v, want 1000", akPixel.uid)
+			}
+			if akPixel.gid == nil || *akPixel.gid != 1000 {
+				t.Errorf("pixel authorized_keys GID = %v, want 1000", akPixel.gid)
 			}
 			idx++
 
@@ -373,7 +478,7 @@ func TestProvision(t *testing.T) {
 			for _, want := range []string{
 				"set -e",
 				"openssh-server sudo",
-				"useradd -m -s /bin/bash -G sudo pixel",
+				"useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel",
 				"NOPASSWD:ALL",
 				"/home/pixel/.ssh",
 				"chown -R pixel:pixel",

@@ -61,6 +61,35 @@ func Exec(ctx context.Context, host, user, keyPath string, command []string) (in
 	return 0, nil
 }
 
+// WaitProvisioned polls the remote host until /root/.devtools-provisioned exists.
+func WaitProvisioned(ctx context.Context, host, user, keyPath string, timeout time.Duration) error {
+	return pollUntil(ctx, 2*time.Second, timeout, func(ctx context.Context) bool {
+		code, err := Exec(ctx, host, user, keyPath, []string{"sudo", "test", "-f", "/root/.devtools-provisioned"})
+		return err == nil && code == 0
+	})
+}
+
+// pollUntil calls checkFn at the given interval until it returns true or the
+// timeout/context expires.
+func pollUntil(ctx context.Context, interval, timeout time.Duration, checkFn func(ctx context.Context) bool) error {
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return fmt.Errorf("timed out after %s", timeout)
+		case <-ticker.C:
+			if checkFn(ctx) {
+				return nil
+			}
+		}
+	}
+}
+
 func sshArgs(host, user, keyPath string) []string {
 	args := []string{
 		"-o", "StrictHostKeyChecking=no",
