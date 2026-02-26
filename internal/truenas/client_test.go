@@ -214,44 +214,22 @@ func TestContainerDataset(t *testing.T) {
 	}
 }
 
-func TestListSnapshots_VersionDispatch(t *testing.T) {
-	tests := []struct {
-		name       string
-		version    truenas.Version
-		wantMethod string
-	}{
-		{
-			name:       "pre-25.10 uses zfs.snapshot.query",
-			version:    truenas.Version{Major: 25, Minor: 4},
-			wantMethod: "zfs.snapshot.query",
-		},
-		{
-			name:       "25.10+ uses pool.snapshot.query",
-			version:    truenas.Version{Major: 25, Minor: 10},
-			wantMethod: "pool.snapshot.query",
+func TestListSnapshots(t *testing.T) {
+	var calledMethod string
+	c := &Client{
+		ws: &client.MockClient{
+			CallFunc: func(ctx context.Context, method string, params any) (json.RawMessage, error) {
+				calledMethod = method
+				return json.RawMessage(`[]`), nil
+			},
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var calledMethod string
-			c := &Client{
-				version: tt.version,
-				ws: &client.MockClient{
-					CallFunc: func(ctx context.Context, method string, params any) (json.RawMessage, error) {
-						calledMethod = method
-						return json.RawMessage(`[]`), nil
-					},
-				},
-			}
-
-			_, err := c.ListSnapshots(context.Background(), "tank/containers/px-test")
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if calledMethod != tt.wantMethod {
-				t.Errorf("called %q, want %q", calledMethod, tt.wantMethod)
-			}
-		})
+	_, err := c.ListSnapshots(context.Background(), "tank/containers/px-test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if calledMethod != "zfs.snapshot.query" {
+		t.Errorf("called %q, want zfs.snapshot.query", calledMethod)
 	}
 }

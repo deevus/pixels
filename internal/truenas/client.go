@@ -20,7 +20,6 @@ type Client struct {
 	Virt      truenas.VirtServiceAPI
 	Snapshot  truenas.SnapshotServiceAPI
 	Interface truenas.InterfaceServiceAPI
-	version   truenas.Version
 }
 
 // Connect creates and connects a TrueNAS WebSocket client.
@@ -46,16 +45,11 @@ func Connect(ctx context.Context, cfg *config.Config) (*Client, error) {
 		Virt:      truenas.NewVirtService(ws, v),
 		Snapshot:  truenas.NewSnapshotService(ws, v),
 		Interface: truenas.NewInterfaceService(ws, v),
-		version:   v,
 	}, nil
 }
 
 func (c *Client) Close() error {
 	return c.ws.Close()
-}
-
-func (c *Client) Version() truenas.Version {
-	return c.version
 }
 
 type virtGlobalConfig struct {
@@ -306,12 +300,7 @@ func (c *Client) ListInstances(ctx context.Context) ([]truenas.VirtInstance, err
 
 // ListSnapshots queries snapshots for the given ZFS dataset.
 func (c *Client) ListSnapshots(ctx context.Context, dataset string) ([]truenas.Snapshot, error) {
-	method := "zfs.snapshot.query"
-	if c.version.AtLeast(25, 10) {
-		method = "pool.snapshot.query"
-	}
-
-	result, err := c.ws.Call(ctx, method, []any{
+	result, err := c.ws.Call(ctx, "zfs.snapshot.query", []any{
 		[][]any{{"dataset", "=", dataset}},
 	})
 	if err != nil {
@@ -327,12 +316,7 @@ func (c *Client) ListSnapshots(ctx context.Context, dataset string) ([]truenas.S
 
 // SnapshotRollback rolls back to the given snapshot ID (dataset@name).
 func (c *Client) SnapshotRollback(ctx context.Context, snapshotID string) error {
-	method := "zfs.snapshot.rollback"
-	if c.version.AtLeast(25, 10) {
-		method = "pool.snapshot.rollback"
-	}
-
-	_, err := c.ws.Call(ctx, method, []any{snapshotID})
+	_, err := c.ws.Call(ctx, "zfs.snapshot.rollback", []any{snapshotID})
 	if err != nil {
 		return fmt.Errorf("rolling back snapshot %s: %w", snapshotID, err)
 	}
