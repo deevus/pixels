@@ -120,8 +120,26 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 	// Write rc.local — systemd-rc-local-generator automatically creates and
 	// starts rc-local.service if /etc/rc.local exists and is executable.
 	rcLocal := `#!/bin/sh
+set -e
 if [ ! -f /root/.ssh-provisioned ]; then
-    apt-get update -qq && apt-get install -y -qq openssh-server && systemctl enable --now ssh && touch /root/.ssh-provisioned
+    apt-get update -qq
+    apt-get install -y -qq openssh-server sudo
+
+    if ! id pixel >/dev/null 2>&1; then
+        useradd -m -s /bin/bash -G sudo pixel
+    fi
+
+    echo 'pixel ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/pixel
+    chmod 0440 /etc/sudoers.d/pixel
+
+    mkdir -p /home/pixel/.ssh
+    cp /root/.ssh/authorized_keys /home/pixel/.ssh/authorized_keys
+    chown -R pixel:pixel /home/pixel/.ssh
+    chmod 700 /home/pixel/.ssh
+    chmod 600 /home/pixel/.ssh/authorized_keys
+
+    systemctl enable --now ssh
+    touch /root/.ssh-provisioned
 fi
 exit 0
 `

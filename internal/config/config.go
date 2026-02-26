@@ -57,7 +57,7 @@ func Load() (*Config, error) {
 			Pool:   "tank",
 		},
 		SSH: SSH{
-			User: "root",
+			User: "pixel",
 			Key:  "~/.ssh/id_ed25519",
 		},
 	}

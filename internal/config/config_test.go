@@ -37,8 +37,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Defaults.Pool != "tank" {
 		t.Errorf("pool = %q, want %q", cfg.Defaults.Pool, "tank")
 	}
-	if cfg.SSH.User != "root" {
-		t.Errorf("ssh.user = %q, want %q", cfg.SSH.User, "root")
+	if cfg.SSH.User != "pixel" {
+		t.Errorf("ssh.user = %q, want %q", cfg.SSH.User, "pixel")
 	}
 	if cfg.TrueNAS.Username != "root" {
 		t.Errorf("truenas.username = %q, want %q", cfg.TrueNAS.Username, "root")
