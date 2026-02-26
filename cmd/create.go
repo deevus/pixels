@@ -26,6 +26,7 @@ func init() {
 	cmd.Flags().Int64("memory", 0, "memory in MiB (default from config)")
 	cmd.Flags().Bool("no-provision", false, "skip all provisioning")
 	cmd.Flags().Bool("console", false, "wait for provisioning and open console")
+	cmd.Flags().String("from", "", "create from checkpoint (container:label)")
 	rootCmd.AddCommand(cmd)
 }
 
@@ -36,6 +37,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	image, _ := cmd.Flags().GetString("image")
 	cpu, _ := cmd.Flags().GetString("cpu")
 	memory, _ := cmd.Flags().GetInt64("memory")
+	from, _ := cmd.Flags().GetString("from")
 
 	if image == "" {
 		image = cfg.Defaults.Image
@@ -47,6 +49,21 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		memory = cfg.Defaults.Memory
 	}
 
+	// Parse --from flag: "container" or "container:label"
+	var fromSource, fromLabel string
+	var tempSnapshot bool
+	if from != "" {
+		if parts := strings.SplitN(from, ":", 2); len(parts) == 2 {
+			if parts[0] == "" || parts[1] == "" {
+				return fmt.Errorf("--from must be container or container:label (e.g. --from base or --from base:ready)")
+			}
+			fromSource, fromLabel = parts[0], parts[1]
+		} else {
+			fromSource = from
+			tempSnapshot = true
+		}
+	}
+
 	client, err := connectClient(ctx)
 	if err != nil {
 		return err
@@ -54,6 +71,43 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	defer client.Close()
 
 	start := time.Now()
+
+	// When cloning from a checkpoint, verify/create it before creating
+	// the container so we fail fast without leaving anything to clean up.
+	skipProvision := fromSource != ""
+	var snapshotID string
+	if skipProvision {
+		srcDS, err := resolveDatasetPath(ctx, client, fromSource)
+		if err != nil {
+			return fmt.Errorf("resolving source dataset: %w", err)
+		}
+
+		if tempSnapshot {
+			// Auto-snapshot the source container's current state.
+			fromLabel = "px-clone-" + time.Now().Format("20060102-150405")
+			if _, err := client.Snapshot.Create(ctx, truenas.CreateSnapshotOpts{
+				Dataset: srcDS,
+				Name:    fromLabel,
+			}); err != nil {
+				return fmt.Errorf("snapshotting %s: %w", fromSource, err)
+			}
+			defer func() {
+				_ = client.Snapshot.Delete(ctx, srcDS+"@"+fromLabel)
+			}()
+		}
+
+		snapshotID = srcDS + "@" + fromLabel
+
+		if !tempSnapshot {
+			snap, err := client.Snapshot.Get(ctx, snapshotID)
+			if err != nil {
+				return fmt.Errorf("looking up checkpoint: %w", err)
+			}
+			if snap == nil {
+				return fmt.Errorf("checkpoint %q not found for %s", fromLabel, fromSource)
+			}
+		}
+	}
 
 	opts := tnc.CreateInstanceOpts{
 		Name:      containerName(name),
@@ -84,9 +138,38 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("creating instance: %w", err)
 	}
 
+	// Clone-from-checkpoint: stop the new container, destroy its ZFS dataset,
+	// and clone the checkpoint snapshot in its place via a temporary cron job
+	// (pool.dataset.* APIs can't see .ix-virt managed datasets).
+	if skipProvision {
+		if tempSnapshot {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Cloning from %s...\n", fromSource)
+		} else {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Cloning from %s checkpoint %q...\n", fromSource, fromLabel)
+		}
+
+		if err := client.Virt.StopInstance(ctx, containerName(name), truenas.StopVirtInstanceOpts{Timeout: 30}); err != nil {
+			return fmt.Errorf("stopping %s for clone: %w", name, err)
+		}
+
+		if err := client.ReplaceContainerRootfs(ctx, containerName(name), snapshotID); err != nil {
+			_ = client.Virt.DeleteInstance(ctx, containerName(name))
+			return fmt.Errorf("cloning checkpoint: %w", err)
+		}
+
+		if err := client.Virt.StartInstance(ctx, containerName(name)); err != nil {
+			return fmt.Errorf("starting %s: %w", name, err)
+		}
+
+		instance, err = client.Virt.GetInstance(ctx, containerName(name))
+		if err != nil {
+			return fmt.Errorf("refreshing instance: %w", err)
+		}
+	}
+
 	// Provision while the container is running (rootfs only mounted when up).
 	noProvision, _ := cmd.Flags().GetBool("no-provision")
-	provisionEnabled := cfg.Provision.IsEnabled() && !noProvision
+	provisionEnabled := cfg.Provision.IsEnabled() && !noProvision && !skipProvision
 
 	if provisionEnabled {
 		pubKey, _ := readSSHPubKey()
@@ -126,10 +209,16 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	ip := resolveIP(instance)
-	if ip != "" && provisionEnabled {
-		// Wait for the systemd service to install openssh-server.
-		if err := ssh.WaitReady(ctx, ip, 90*time.Second); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: SSH not ready: %v\n", err)
+	if ip != "" {
+		// SSH wait: 90s for fresh images (openssh-server install), 30s for clones.
+		timeout := 90 * time.Second
+		if skipProvision {
+			timeout = 30 * time.Second
+		}
+		if provisionEnabled || skipProvision {
+			if err := ssh.WaitReady(ctx, ip, timeout); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: SSH not ready: %v\n", err)
+			}
 		}
 	}
 

@@ -20,6 +20,7 @@ type Client struct {
 	Interface  truenas.InterfaceServiceAPI
 	Network    truenas.NetworkServiceAPI
 	Filesystem truenas.FilesystemServiceAPI
+	Cron       truenas.CronServiceAPI
 }
 
 // Connect creates and connects a TrueNAS WebSocket client.
@@ -47,6 +48,7 @@ func Connect(ctx context.Context, cfg *config.Config) (*Client, error) {
 		Interface:  truenas.NewInterfaceService(ws, v),
 		Network:    truenas.NewNetworkService(ws, v),
 		Filesystem: truenas.NewFilesystemService(ws, v),
+		Cron:       truenas.NewCronService(ws, v),
 	}, nil
 }
 
@@ -393,6 +395,75 @@ func (c *Client) ListSnapshots(ctx context.Context, dataset string) ([]truenas.S
 // SnapshotRollback rolls back to the given snapshot ID (dataset@name).
 func (c *Client) SnapshotRollback(ctx context.Context, snapshotID string) error {
 	return c.Snapshot.Rollback(ctx, snapshotID)
+}
+
+// ReplaceContainerRootfs destroys the container's ZFS dataset and clones
+// the checkpoint snapshot in its place. The container must be stopped.
+//
+// The pool.dataset.* APIs can't see .ix-virt managed datasets, so we use
+// a temporary cron job to run raw ZFS commands on the host as root.
+func (c *Client) ReplaceContainerRootfs(ctx context.Context, containerName, snapshotID string) error {
+	gcfg, err := c.Virt.GetGlobalConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("querying virt global config: %w", err)
+	}
+	if gcfg.Dataset == "" {
+		return fmt.Errorf("no dataset in virt global config")
+	}
+	dstDataset := gcfg.Dataset + "/containers/" + containerName
+
+	// Validate paths contain only safe characters (alphanumeric, .-_/@).
+	for _, p := range []string{dstDataset, snapshotID} {
+		for _, ch := range p {
+			if !isZFSPathChar(ch) {
+				return fmt.Errorf("unsafe character %q in ZFS path %q", string(ch), p)
+			}
+		}
+	}
+
+	cmd := fmt.Sprintf(
+		"/usr/sbin/zfs destroy -r %s && /usr/sbin/zfs clone %s %s"+
+			" && tmp=$(mktemp -d) && mount -t zfs %s \"$tmp\""+
+			" && echo '%s' > \"$tmp/rootfs/etc/hostname\""+
+			" && umount \"$tmp\" && rmdir \"$tmp\"",
+		dstDataset, snapshotID, dstDataset, dstDataset, containerName,
+	)
+
+	// Create a disabled cron job — we run it manually, then delete it.
+	job, err := c.Cron.Create(ctx, truenas.CreateCronJobOpts{
+		Command:     cmd,
+		User:        "root",
+		Description: "pixels: clone checkpoint (temporary)",
+		Enabled:     false,
+		Schedule: truenas.Schedule{
+			Minute: "00",
+			Hour:   "00",
+			Dom:    "1",
+			Month:  "1",
+			Dow:    "1",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("creating temp cron job: %w", err)
+	}
+
+	// Always clean up the cron job, even if run fails.
+	defer func() {
+		_ = c.Cron.Delete(ctx, job.ID)
+	}()
+
+	// Run the cron job and wait for completion.
+	if err := c.Cron.Run(ctx, job.ID, false); err != nil {
+		return fmt.Errorf("running ZFS clone: %w", err)
+	}
+
+	return nil
+}
+
+// isZFSPathChar returns true if the rune is valid in a ZFS dataset/snapshot path.
+func isZFSPathChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+		r == '/' || r == '-' || r == '_' || r == '.' || r == '@'
 }
 
 func intPtr(v int) *int { return &v }
