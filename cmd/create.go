@@ -101,10 +101,16 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			if err := client.Virt.StartInstance(ctx, containerName(name)); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: restart after provision: %v\n", err)
 			}
-			// Refresh instance to get IP after restart.
-			instance, err = client.Virt.GetInstance(ctx, containerName(name))
-			if err != nil {
-				return fmt.Errorf("refreshing instance: %w", err)
+			// Poll for IP — DHCP assignment takes a few seconds after restart.
+			for range 15 {
+				instance, err = client.Virt.GetInstance(ctx, containerName(name))
+				if err != nil {
+					return fmt.Errorf("refreshing instance: %w", err)
+				}
+				if resolveIP(instance) != "" {
+					break
+				}
+				time.Sleep(time.Second)
 			}
 		}
 	}
