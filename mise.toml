@@ -1,0 +1,10 @@
+[tools]
+go = "latest"
+
+[tasks.build]
+run = "go build ."
+
+[tasks.build-and-run]
+depends = ["build"]
+alias = "br"
+run = "./pixels"
