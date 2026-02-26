@@ -221,8 +221,9 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Cache IP and status for fast exec/console lookups.
-	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
+	// Cache IP, status, and SSH key for fast exec/console lookups.
+	pubKeyCached, _ := readSSHPubKey()
+	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status, SSHPubKey: pubKeyCached})
 
 	elapsed := time.Since(start).Truncate(100 * time.Millisecond)
 	fmt.Fprintf(cmd.OutOrStdout(), "Created %s in %s\n", containerName(name), elapsed)

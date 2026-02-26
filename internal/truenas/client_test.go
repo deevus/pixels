@@ -601,63 +601,48 @@ func TestListSnapshots(t *testing.T) {
 	}
 }
 
-func TestAuthorizeKey(t *testing.T) {
+func TestWriteAuthorizedKey(t *testing.T) {
 	tests := []struct {
 		name       string
 		pool       string
 		pubKey     string
 		configErr  error
-		createErr  error
-		runErr     error
-		deleteErr  error
+		writeErr   error
 		wantErr    bool
 		wantErrMsg string
-		checkCmd   func(t *testing.T, cmd string)
+		wantCalls  int
+		check      func(t *testing.T, calls []writeCall)
 	}{
 		{
-			name:   "appends key to both authorized_keys files",
-			pool:   "tank",
-			pubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest user@newmachine",
-			checkCmd: func(t *testing.T, cmd string) {
+			name:      "writes key to both root and pixel authorized_keys",
+			pool:      "tank",
+			pubKey:    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest user@newmachine",
+			wantCalls: 2,
+			check: func(t *testing.T, calls []writeCall) {
 				rootfs := "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs"
-				// Should check and append to root's authorized_keys.
-				if !strings.Contains(cmd, rootfs+"/root/.ssh/authorized_keys") {
-					t.Error("command missing root authorized_keys path")
+
+				root := calls[0]
+				if root.path != rootfs+"/root/.ssh/authorized_keys" {
+					t.Errorf("root path = %q", root.path)
 				}
-				// Should check and append to pixel's authorized_keys.
-				if !strings.Contains(cmd, rootfs+"/home/pixel/.ssh/authorized_keys") {
-					t.Error("command missing pixel authorized_keys path")
+				if !strings.Contains(root.content, "ssh-ed25519") {
+					t.Error("root authorized_keys missing key")
 				}
-				// Should use grep -qF for deduplication.
-				if !strings.Contains(cmd, "grep -qF") {
-					t.Error("command missing grep dedup check")
+				if root.mode != 0o600 {
+					t.Errorf("root mode = %o, want 600", root.mode)
 				}
-				// Should contain the public key.
-				if !strings.Contains(cmd, "ssh-ed25519") {
-					t.Error("command missing SSH public key")
+
+				pixel := calls[1]
+				if pixel.path != rootfs+"/home/pixel/.ssh/authorized_keys" {
+					t.Errorf("pixel path = %q", pixel.path)
+				}
+				if pixel.uid == nil || *pixel.uid != 1000 {
+					t.Errorf("pixel UID = %v, want 1000", pixel.uid)
+				}
+				if pixel.gid == nil || *pixel.gid != 1000 {
+					t.Errorf("pixel GID = %v, want 1000", pixel.gid)
 				}
 			},
-		},
-		{
-			name:       "rejects key with single quote",
-			pool:       "tank",
-			pubKey:     "ssh-ed25519 AAAA it's-a-trap",
-			wantErr:    true,
-			wantErrMsg: "unsafe character",
-		},
-		{
-			name:       "rejects key with newline",
-			pool:       "tank",
-			pubKey:     "ssh-ed25519 AAAA\nmalicious",
-			wantErr:    true,
-			wantErrMsg: "unsafe character",
-		},
-		{
-			name:       "rejects empty key",
-			pool:       "tank",
-			pubKey:     "",
-			wantErr:    true,
-			wantErrMsg: "empty",
 		},
 		{
 			name:      "global config error",
@@ -673,32 +658,17 @@ func TestAuthorizeKey(t *testing.T) {
 			wantErrMsg: "no pool",
 		},
 		{
-			name:      "cron create error",
-			pool:      "tank",
-			pubKey:    "ssh-ed25519 AAAA test@host",
-			createErr: errors.New("permission denied"),
-			wantErr:   true,
-		},
-		{
-			name:    "cron run error",
-			pool:    "tank",
-			pubKey:  "ssh-ed25519 AAAA test@host",
-			runErr:  errors.New("script failed"),
-			wantErr: true,
-		},
-		{
-			name:      "cron delete error is ignored",
-			pool:      "tank",
-			pubKey:    "ssh-ed25519 AAAA test@host",
-			deleteErr: errors.New("cleanup failed"),
-			wantErr:   false, // delete errors are deferred and swallowed
+			name:     "write error",
+			pool:     "tank",
+			pubKey:   "ssh-ed25519 AAAA test@host",
+			writeErr: errors.New("disk full"),
+			wantErr:  true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var capturedCmd string
-			var cronCreated, cronRun, cronDeleted bool
+			var calls []writeCall
 
 			c := &Client{
 				Virt: &truenas.MockVirtService{
@@ -709,42 +679,24 @@ func TestAuthorizeKey(t *testing.T) {
 						return &truenas.VirtGlobalConfig{Pool: tt.pool}, nil
 					},
 				},
-				Cron: &truenas.MockCronService{
-					CreateFunc: func(ctx context.Context, opts truenas.CreateCronJobOpts) (*truenas.CronJob, error) {
-						if tt.createErr != nil {
-							return nil, tt.createErr
+				Filesystem: &truenas.MockFilesystemService{
+					WriteFileFunc: func(ctx context.Context, path string, params truenas.WriteFileParams) error {
+						if tt.writeErr != nil {
+							return tt.writeErr
 						}
-						cronCreated = true
-						capturedCmd = opts.Command
-						if opts.User != "root" {
-							t.Errorf("cron user = %q, want root", opts.User)
-						}
-						if opts.Enabled {
-							t.Error("cron job should be created disabled")
-						}
-						return &truenas.CronJob{ID: 99}, nil
-					},
-					RunFunc: func(ctx context.Context, id int64, skipDisabled bool) error {
-						cronRun = true
-						if id != 99 {
-							t.Errorf("run id = %d, want 99", id)
-						}
-						if skipDisabled {
-							t.Error("skipDisabled should be false")
-						}
-						return tt.runErr
-					},
-					DeleteFunc: func(ctx context.Context, id int64) error {
-						cronDeleted = true
-						if id != 99 {
-							t.Errorf("delete id = %d, want 99", id)
-						}
-						return tt.deleteErr
+						calls = append(calls, writeCall{
+							path:    path,
+							content: string(params.Content),
+							mode:    uint32(params.Mode),
+							uid:     params.UID,
+							gid:     params.GID,
+						})
+						return nil
 					},
 				},
 			}
 
-			err := c.AuthorizeKey(context.Background(), "px-test", tt.pubKey)
+			err := c.WriteAuthorizedKey(context.Background(), "px-test", tt.pubKey)
 
 			if tt.wantErr {
 				if err == nil {
@@ -759,18 +711,12 @@ func TestAuthorizeKey(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if !cronCreated {
-				t.Error("cron job was not created")
-			}
-			if !cronRun {
-				t.Error("cron job was not run")
-			}
-			if !cronDeleted {
-				t.Error("cron job was not deleted (cleanup)")
+			if len(calls) != tt.wantCalls {
+				t.Fatalf("got %d WriteFile calls, want %d", len(calls), tt.wantCalls)
 			}
 
-			if tt.checkCmd != nil {
-				tt.checkCmd(t, capturedCmd)
+			if tt.check != nil {
+				tt.check(t, calls)
 			}
 		})
 	}

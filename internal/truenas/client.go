@@ -460,19 +460,9 @@ func (c *Client) ReplaceContainerRootfs(ctx context.Context, containerName, snap
 	return nil
 }
 
-// AuthorizeKey appends an SSH public key to a running container's
-// authorized_keys files (root and pixel user) via a temporary cron job.
-// The key is only appended if not already present (deduplication).
-func (c *Client) AuthorizeKey(ctx context.Context, name, sshPubKey string) error {
-	if sshPubKey == "" {
-		return fmt.Errorf("empty SSH public key")
-	}
-	for _, ch := range sshPubKey {
-		if ch == '\'' || ch == '\n' || ch == '\r' {
-			return fmt.Errorf("unsafe character %q in SSH public key", string(ch))
-		}
-	}
-
+// WriteAuthorizedKey writes an SSH public key to a running container's
+// authorized_keys files (root and pixel user) via the TrueNAS file_receive API.
+func (c *Client) WriteAuthorizedKey(ctx context.Context, name, sshPubKey string) error {
 	gcfg, err := c.Virt.GetGlobalConfig(ctx)
 	if err != nil {
 		return err
@@ -482,39 +472,23 @@ func (c *Client) AuthorizeKey(ctx context.Context, name, sshPubKey string) error
 	}
 
 	rootfs := fmt.Sprintf("/var/lib/incus/storage-pools/%s/containers/%s/rootfs", gcfg.Pool, name)
-	rootAK := rootfs + "/root/.ssh/authorized_keys"
-	pixelAK := rootfs + "/home/pixel/.ssh/authorized_keys"
+	keyData := []byte(sshPubKey + "\n")
 
-	cmd := fmt.Sprintf(
-		"grep -qF '%s' %s 2>/dev/null || echo '%s' >> %s"+
-			" && grep -qF '%s' %s 2>/dev/null || echo '%s' >> %s",
-		sshPubKey, rootAK, sshPubKey, rootAK,
-		sshPubKey, pixelAK, sshPubKey, pixelAK,
-	)
-
-	job, err := c.Cron.Create(ctx, truenas.CreateCronJobOpts{
-		Command:     cmd,
-		User:        "root",
-		Description: "pixels: authorize SSH key (temporary)",
-		Enabled:     false,
-		Schedule: truenas.Schedule{
-			Minute: "00",
-			Hour:   "00",
-			Dom:    "1",
-			Month:  "1",
-			Dow:    "1",
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("creating temp cron job: %w", err)
+	if err := c.Filesystem.WriteFile(ctx, rootfs+"/root/.ssh/authorized_keys", truenas.WriteFileParams{
+		Content: keyData,
+		Mode:    0o600,
+	}); err != nil {
+		return fmt.Errorf("writing root authorized_keys: %w", err)
 	}
 
-	defer func() {
-		_ = c.Cron.Delete(ctx, job.ID)
-	}()
-
-	if err := c.Cron.Run(ctx, job.ID, false); err != nil {
-		return fmt.Errorf("authorizing SSH key: %w", err)
+	pixelUID := intPtr(1000)
+	if err := c.Filesystem.WriteFile(ctx, rootfs+"/home/pixel/.ssh/authorized_keys", truenas.WriteFileParams{
+		Content: keyData,
+		Mode:    0o600,
+		UID:     pixelUID,
+		GID:     pixelUID,
+	}); err != nil {
+		return fmt.Errorf("writing pixel authorized_keys: %w", err)
 	}
 
 	return nil

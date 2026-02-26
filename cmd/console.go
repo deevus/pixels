@@ -23,9 +23,12 @@ func runConsole(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	name := args[0]
 
-	// Try local cache first for fast path (already running).
+	pubKey, _ := readSSHPubKey()
+
+	// Fast path: cache hit with matching SSH key — no TrueNAS connection needed.
 	var ip string
-	if cached := cache.Get(name); cached != nil && cached.IP != "" && cached.Status == "RUNNING" {
+	cached := cache.Get(name)
+	if cached != nil && cached.IP != "" && cached.Status == "RUNNING" && cached.SSHPubKey == pubKey {
 		ip = cached.IP
 	}
 
@@ -59,7 +62,15 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		if ip == "" {
 			return fmt.Errorf("no IP address for %s", name)
 		}
-		cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
+
+		// Write SSH key if configured (ensures this machine is authorized).
+		if pubKey != "" {
+			if err := client.WriteAuthorizedKey(ctx, containerName(name), pubKey); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: writing SSH key: %v\n", err)
+			}
+		}
+
+		cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status, SSHPubKey: pubKey})
 	}
 
 	if err := ssh.WaitReady(ctx, ip, 30*time.Second); err != nil {
