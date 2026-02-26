@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/deevus/pixels/internal/config"
+	"github.com/deevus/pixels/internal/ssh"
 	tnc "github.com/deevus/pixels/internal/truenas"
 )
 
@@ -101,9 +102,13 @@ func readSSHPubKey() (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// writeSSHKey connects to TrueNAS and writes the current machine's SSH
-// public key to the container's authorized_keys. Called when key auth fails.
-func writeSSHKey(cmd *cobra.Command, ctx context.Context, name string) error {
+// ensureSSHAuth tests key auth and, if it fails, writes the current machine's
+// SSH public key to the container's authorized_keys via TrueNAS.
+func ensureSSHAuth(cmd *cobra.Command, ctx context.Context, ip, name string) error {
+	if err := ssh.TestAuth(ctx, ip, cfg.SSH.User, cfg.SSH.Key); err == nil {
+		return nil
+	}
+
 	pubKey, err := readSSHPubKey()
 	if err != nil {
 		return err

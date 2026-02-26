@@ -66,12 +66,9 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("waiting for SSH: %w", err)
 	}
 
-	// Test key auth before exec (syscall.Exec can't retry).
-	// If auth fails, write the current machine's key and retest.
-	if err := ssh.TestAuth(ctx, ip, cfg.SSH.User, cfg.SSH.Key); err != nil {
-		if writeErr := writeSSHKey(cmd, ctx, name); writeErr != nil {
-			return writeErr
-		}
+	// Verify key auth; if it fails, write this machine's key via TrueNAS.
+	if err := ensureSSHAuth(cmd, ctx, ip, name); err != nil {
+		return err
 	}
 
 	// Console replaces the process — does not return on success.
