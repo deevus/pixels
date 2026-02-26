@@ -24,6 +24,7 @@ func init() {
 	cmd.Flags().String("image", "", "container image (default from config)")
 	cmd.Flags().String("cpu", "", "CPU cores (default from config)")
 	cmd.Flags().Int64("memory", 0, "memory in MiB (default from config)")
+	cmd.Flags().Bool("no-provision", false, "skip all provisioning")
 	rootCmd.AddCommand(cmd)
 }
 
@@ -83,40 +84,48 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Provision while the container is running (rootfs only mounted when up).
-	pubKey, _ := readSSHPubKey()
-	provOpts := tnc.ProvisionOpts{
-		SSHPubKey: pubKey,
-		DNS:       cfg.Defaults.DNS,
-	}
-	needsProvision := pubKey != "" || len(cfg.Defaults.DNS) > 0
+	noProvision, _ := cmd.Flags().GetBool("no-provision")
+	provisionEnabled := cfg.Provision.IsEnabled() && !noProvision
 
-	if needsProvision {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Provisioning...\n")
+	if provisionEnabled {
+		pubKey, _ := readSSHPubKey()
+		provOpts := tnc.ProvisionOpts{
+			SSHPubKey: pubKey,
+			DNS:       cfg.Defaults.DNS,
+			Env:       cfg.Env,
+			DevTools:  cfg.Provision.DevToolsEnabled(),
+		}
+		needsProvision := pubKey != "" || len(cfg.Defaults.DNS) > 0 ||
+			len(cfg.Env) > 0 || provOpts.DevTools
 
-		if err := client.Provision(ctx, containerName(name), provOpts); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: provisioning failed: %v\n", err)
-		} else if pubKey != "" {
-			// Restart so systemd picks up rc.local on boot.
-			_ = client.Virt.StopInstance(ctx, containerName(name), truenas.StopVirtInstanceOpts{Timeout: 30})
-			if err := client.Virt.StartInstance(ctx, containerName(name)); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: restart after provision: %v\n", err)
-			}
-			// Poll for IP — DHCP assignment takes a few seconds after restart.
-			for range 15 {
-				instance, err = client.Virt.GetInstance(ctx, containerName(name))
-				if err != nil {
-					return fmt.Errorf("refreshing instance: %w", err)
+		if needsProvision {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Provisioning...\n")
+
+			if err := client.Provision(ctx, containerName(name), provOpts); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: provisioning failed: %v\n", err)
+			} else if pubKey != "" {
+				// Restart so systemd picks up rc.local on boot.
+				_ = client.Virt.StopInstance(ctx, containerName(name), truenas.StopVirtInstanceOpts{Timeout: 30})
+				if err := client.Virt.StartInstance(ctx, containerName(name)); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: restart after provision: %v\n", err)
 				}
-				if resolveIP(instance) != "" {
-					break
+				// Poll for IP — DHCP assignment takes a few seconds after restart.
+				for range 15 {
+					instance, err = client.Virt.GetInstance(ctx, containerName(name))
+					if err != nil {
+						return fmt.Errorf("refreshing instance: %w", err)
+					}
+					if resolveIP(instance) != "" {
+						break
+					}
+					time.Sleep(time.Second)
 				}
-				time.Sleep(time.Second)
 			}
 		}
 	}
 
 	ip := resolveIP(instance)
-	if ip != "" {
+	if ip != "" && provisionEnabled {
 		// Wait for the systemd service to install openssh-server.
 		if err := ssh.WaitReady(ctx, ip, 90*time.Second); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: SSH not ready: %v\n", err)
@@ -128,9 +137,13 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	elapsed := time.Since(start).Truncate(100 * time.Millisecond)
 	fmt.Fprintf(cmd.OutOrStdout(), "Created %s in %s\n", containerName(name), elapsed)
+	fmt.Fprintf(cmd.OutOrStdout(), "  Hostname: %s\n", containerName(name))
 	if ip != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "  IP:  %s\n", ip)
-		fmt.Fprintf(cmd.OutOrStdout(), "  SSH: ssh %s@%s\n", cfg.SSH.User, ip)
+		fmt.Fprintf(cmd.OutOrStdout(), "  IP:       %s\n", ip)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "  Console:  pixels console %s\n", name)
+	if provisionEnabled && cfg.Provision.DevToolsEnabled() {
+		fmt.Fprintf(cmd.OutOrStdout(), "  Dev tools installing in background (sudo journalctl -fu pixels-devtools)\n")
 	}
 	return nil
 }

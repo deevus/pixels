@@ -43,6 +43,19 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.TrueNAS.Username != "root" {
 		t.Errorf("truenas.username = %q, want %q", cfg.TrueNAS.Username, "root")
 	}
+
+	// Provision defaults: enabled when not set.
+	if !cfg.Provision.IsEnabled() {
+		t.Error("Provision.IsEnabled() = false, want true (default)")
+	}
+	if !cfg.Provision.DevToolsEnabled() {
+		t.Error("Provision.DevToolsEnabled() = false, want true (default)")
+	}
+
+	// Env defaults: nil when not configured.
+	if cfg.Env != nil {
+		t.Errorf("Env = %v, want nil", cfg.Env)
+	}
 }
 
 func TestLoadFromFile(t *testing.T) {
@@ -71,6 +84,14 @@ key = "/tmp/test_key"
 
 [checkpoint]
 dataset_prefix = "ssd/custom/containers"
+
+[provision]
+enabled = true
+devtools = false
+
+[env]
+FOO = "bar"
+BAZ = "qux"
 `
 	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -115,6 +136,22 @@ dataset_prefix = "ssd/custom/containers"
 	if cfg.Checkpoint.DatasetPrefix != "ssd/custom/containers" {
 		t.Errorf("dataset_prefix = %q, want %q", cfg.Checkpoint.DatasetPrefix, "ssd/custom/containers")
 	}
+
+	// Provision section from TOML.
+	if !cfg.Provision.IsEnabled() {
+		t.Error("Provision.IsEnabled() = false, want true")
+	}
+	if cfg.Provision.DevToolsEnabled() {
+		t.Error("Provision.DevToolsEnabled() = true, want false")
+	}
+
+	// Env section from TOML.
+	if cfg.Env["FOO"] != "bar" {
+		t.Errorf("Env[FOO] = %q, want %q", cfg.Env["FOO"], "bar")
+	}
+	if cfg.Env["BAZ"] != "qux" {
+		t.Errorf("Env[BAZ] = %q, want %q", cfg.Env["BAZ"], "qux")
+	}
 }
 
 func TestEnvOverridesFile(t *testing.T) {
@@ -148,6 +185,75 @@ api_key = "file-key"
 	}
 	if cfg.TrueNAS.APIKey != "env-key" {
 		t.Errorf("api_key = %q, want %q (env should override file)", cfg.TrueNAS.APIKey, "env-key")
+	}
+}
+
+func TestProvisionEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfgDir := filepath.Join(dir, "pixels")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// TOML has provision enabled.
+	content := `
+[provision]
+enabled = true
+devtools = true
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Env var overrides to disabled.
+	t.Setenv("PIXELS_PROVISION_ENABLED", "false")
+	t.Setenv("PIXELS_PROVISION_DEVTOOLS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Provision.IsEnabled() {
+		t.Error("Provision.IsEnabled() = true, want false (env should override)")
+	}
+	if cfg.Provision.DevToolsEnabled() {
+		t.Error("Provision.DevToolsEnabled() = true, want false (env should override)")
+	}
+}
+
+func TestEnvExpansion(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfgDir := filepath.Join(dir, "pixels")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := `
+[env]
+MY_KEY = "$PIXELS_TEST_SECRET"
+LITERAL = "no-expansion-here"
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PIXELS_TEST_SECRET", "sk-secret-123")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Env["MY_KEY"] != "sk-secret-123" {
+		t.Errorf("Env[MY_KEY] = %q, want %q (should expand $PIXELS_TEST_SECRET)", cfg.Env["MY_KEY"], "sk-secret-123")
+	}
+	if cfg.Env["LITERAL"] != "no-expansion-here" {
+		t.Errorf("Env[LITERAL] = %q, want %q", cfg.Env["LITERAL"], "no-expansion-here")
 	}
 }
 

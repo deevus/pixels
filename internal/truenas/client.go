@@ -69,11 +69,14 @@ func (c *Client) ContainerDataset(ctx context.Context, name string) (string, err
 // ProvisionOpts contains options for provisioning a container.
 type ProvisionOpts struct {
 	SSHPubKey string
-	DNS       []string // nameservers (e.g. ["1.1.1.1", "8.8.8.8"])
+	DNS       []string          // nameservers (e.g. ["1.1.1.1", "8.8.8.8"])
+	Env       map[string]string // environment variables to inject into /etc/environment
+	DevTools  bool              // whether to install dev tools (mise, claude-code, codex, opencode)
 }
 
-// Provision writes SSH keys, rc.local for openssh-server install, and
-// optional DNS config into a running container's rootfs via file_receive.
+// Provision writes SSH keys, rc.local for openssh-server install, dev tools
+// setup, and optional DNS/env config into a running container's rootfs via
+// file_receive.
 func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts) error {
 	gcfg, err := c.Virt.GetGlobalConfig(ctx)
 	if err != nil {
@@ -86,8 +89,6 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 	rootfs := fmt.Sprintf("/var/lib/incus/storage-pools/%s/containers/%s/rootfs", gcfg.Pool, name)
 
 	// Configure upstream DNS for systemd-resolved via drop-in.
-	// /etc/resolv.conf is a symlink managed by systemd-resolved, so we
-	// configure it through resolved.conf.d instead.
 	if len(opts.DNS) > 0 {
 		var conf strings.Builder
 		conf.WriteString("[Resolve]\nDNS=")
@@ -102,56 +103,171 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		}
 	}
 
-	if opts.SSHPubKey == "" {
+	// Write environment variables to /etc/environment (sourced by PAM on login).
+	if len(opts.Env) > 0 {
+		var envBuf strings.Builder
+		for k, v := range opts.Env {
+			fmt.Fprintf(&envBuf, "%s=%q\n", k, v)
+		}
+		if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/environment", truenas.WriteFileParams{
+			Content: []byte(envBuf.String()),
+			Mode:    0o644,
+		}); err != nil {
+			return fmt.Errorf("writing /etc/environment: %w", err)
+		}
+	}
+
+	if opts.SSHPubKey == "" && !opts.DevTools {
 		return nil
 	}
 
-	// Write authorized_keys.
-	// filesystem.mkdir blocks incus paths, but file_receive works and
-	// auto-creates parent directories.
-	sshDir := rootfs + "/root/.ssh"
-	if err := c.Filesystem.WriteFile(ctx, sshDir+"/authorized_keys", truenas.WriteFileParams{
-		Content: []byte(opts.SSHPubKey + "\n"),
-		Mode:    0o600,
-	}); err != nil {
-		return fmt.Errorf("writing authorized_keys: %w", err)
+	// Write authorized_keys for both root and pixel user.
+	// Writing to pixel's home now (via file_receive) ensures the key is
+	// available immediately, before rc.local creates the user and chowns it.
+	// Pixel user is created with UID/GID 1000 by rc.local.
+	if opts.SSHPubKey != "" {
+		keyData := []byte(opts.SSHPubKey + "\n")
+		if err := c.Filesystem.WriteFile(ctx, rootfs+"/root/.ssh/authorized_keys", truenas.WriteFileParams{
+			Content: keyData,
+			Mode:    0o600,
+		}); err != nil {
+			return fmt.Errorf("writing authorized_keys: %w", err)
+		}
+		pixelUID := intPtr(1000)
+		if err := c.Filesystem.WriteFile(ctx, rootfs+"/home/pixel/.ssh/authorized_keys", truenas.WriteFileParams{
+			Content: keyData,
+			Mode:    0o600,
+			UID:     pixelUID,
+			GID:     pixelUID,
+		}); err != nil {
+			return fmt.Errorf("writing authorized_keys: %w", err)
+		}
+	}
+
+	// Write dev tools setup script and systemd unit.
+	if opts.DevTools {
+		if err := c.Filesystem.WriteFile(ctx, rootfs+"/usr/local/bin/pixels-setup-devtools.sh", truenas.WriteFileParams{
+			Content: []byte(devtoolsSetupScript),
+			Mode:    0o755,
+		}); err != nil {
+			return fmt.Errorf("writing devtools setup script: %w", err)
+		}
+		if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/systemd/system/pixels-devtools.service", truenas.WriteFileParams{
+			Content: []byte(devtoolsServiceUnit),
+			Mode:    0o644,
+		}); err != nil {
+			return fmt.Errorf("writing devtools systemd unit: %w", err)
+		}
 	}
 
 	// Write rc.local — systemd-rc-local-generator automatically creates and
 	// starts rc-local.service if /etc/rc.local exists and is executable.
-	rcLocal := `#!/bin/sh
+	if opts.SSHPubKey != "" {
+		rcLocal := rcLocalSSH
+		if opts.DevTools {
+			rcLocal = rcLocalSSHDevtools
+		}
+		if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/rc.local", truenas.WriteFileParams{
+			Content: []byte(rcLocal),
+			Mode:    0o755,
+		}); err != nil {
+			return fmt.Errorf("writing rc.local: %w", err)
+		}
+	}
+
+	return nil
+}
+
+const rcLocalSSH = `#!/bin/sh
 set -e
 if [ ! -f /root/.ssh-provisioned ]; then
     apt-get update -qq
     apt-get install -y -qq openssh-server sudo
 
     if ! id pixel >/dev/null 2>&1; then
-        useradd -m -s /bin/bash -G sudo pixel
+        userdel -r ubuntu 2>/dev/null || true
+        groupdel ubuntu 2>/dev/null || true
+        groupadd -g 1000 pixel
+        useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel
     fi
+    cp -rn /etc/skel/. /home/pixel/
+    mkdir -p /home/pixel/.ssh
 
     echo 'pixel ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/pixel
     chmod 0440 /etc/sudoers.d/pixel
 
-    mkdir -p /home/pixel/.ssh
-    cp /root/.ssh/authorized_keys /home/pixel/.ssh/authorized_keys
-    chown -R pixel:pixel /home/pixel/.ssh
+    chown -R pixel:pixel /home/pixel
     chmod 700 /home/pixel/.ssh
-    chmod 600 /home/pixel/.ssh/authorized_keys
 
     systemctl enable --now ssh
     touch /root/.ssh-provisioned
 fi
 exit 0
 `
-	if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/rc.local", truenas.WriteFileParams{
-		Content: []byte(rcLocal),
-		Mode:    0o755,
-	}); err != nil {
-		return fmt.Errorf("writing rc.local: %w", err)
-	}
 
-	return nil
-}
+const rcLocalSSHDevtools = `#!/bin/sh
+set -e
+if [ ! -f /root/.ssh-provisioned ]; then
+    apt-get update -qq
+    apt-get install -y -qq openssh-server sudo
+
+    if ! id pixel >/dev/null 2>&1; then
+        userdel -r ubuntu 2>/dev/null || true
+        groupdel ubuntu 2>/dev/null || true
+        groupadd -g 1000 pixel
+        useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel
+    fi
+    cp -rn /etc/skel/. /home/pixel/
+    mkdir -p /home/pixel/.ssh
+
+    echo 'pixel ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/pixel
+    chmod 0440 /etc/sudoers.d/pixel
+
+    chown -R pixel:pixel /home/pixel
+    chmod 700 /home/pixel/.ssh
+
+    systemctl enable --now ssh
+    touch /root/.ssh-provisioned
+fi
+if [ -f /etc/systemd/system/pixels-devtools.service ] && [ ! -f /root/.devtools-provisioned ]; then
+    systemctl daemon-reload
+    systemctl start pixels-devtools.service
+fi
+exit 0
+`
+
+const devtoolsSetupScript = `#!/bin/bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+echo "[$(date -Iseconds)] pixels devtools setup starting"
+
+apt-get update -qq
+apt-get install -y -qq build-essential git curl
+
+# Install mise and dev tools for the pixel user (runs as root, uses su -).
+su - pixel -c 'curl -fsSL https://mise.run | sh'
+su - pixel -c 'echo '\''eval "$(/home/pixel/.local/bin/mise activate bash)"'\'' >> /home/pixel/.bashrc'
+su - pixel -c '/home/pixel/.local/bin/mise use --global node@lts'
+su - pixel -c '/home/pixel/.local/bin/mise exec -- npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai'
+
+touch /root/.devtools-provisioned
+echo "[$(date -Iseconds)] pixels devtools setup complete"
+`
+
+const devtoolsServiceUnit = `[Unit]
+Description=Pixels dev tools provisioning
+After=network-online.target ssh.service
+Wants=network-online.target
+ConditionPathExists=!/root/.devtools-provisioned
+
+[Service]
+Type=oneshot
+Environment="HOME=/root"
+ExecStart=/usr/local/bin/pixels-setup-devtools.sh
+RemainAfterExit=yes
+TimeoutStartSec=600
+`
 
 // NICOpts describes a NIC device to attach during container creation.
 type NICOpts struct {
@@ -278,3 +394,5 @@ func (c *Client) ListSnapshots(ctx context.Context, dataset string) ([]truenas.S
 func (c *Client) SnapshotRollback(ctx context.Context, snapshotID string) error {
 	return c.Snapshot.Rollback(ctx, snapshotID)
 }
+
+func intPtr(v int) *int { return &v }

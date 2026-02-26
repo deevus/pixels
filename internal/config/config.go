@@ -11,10 +11,12 @@ import (
 )
 
 type Config struct {
-	TrueNAS    TrueNAS    `toml:"truenas"`
-	Defaults   Defaults   `toml:"defaults"`
-	SSH        SSH        `toml:"ssh"`
-	Checkpoint Checkpoint `toml:"checkpoint"`
+	TrueNAS    TrueNAS           `toml:"truenas"`
+	Defaults   Defaults          `toml:"defaults"`
+	SSH        SSH               `toml:"ssh"`
+	Checkpoint Checkpoint        `toml:"checkpoint"`
+	Provision  Provision         `toml:"provision"`
+	Env        map[string]string `toml:"env"`
 }
 
 type TrueNAS struct {
@@ -43,6 +45,25 @@ type SSH struct {
 
 type Checkpoint struct {
 	DatasetPrefix string `toml:"dataset_prefix"`
+}
+
+type Provision struct {
+	Enabled  *bool `toml:"enabled"`
+	DevTools *bool `toml:"devtools"`
+}
+
+func (p *Provision) IsEnabled() bool {
+	if p.Enabled == nil {
+		return true
+	}
+	return *p.Enabled
+}
+
+func (p *Provision) DevToolsEnabled() bool {
+	if p.DevTools == nil {
+		return true
+	}
+	return *p.DevTools
 }
 
 func Load() (*Config, error) {
@@ -81,8 +102,14 @@ func Load() (*Config, error) {
 	applyEnv(&cfg.SSH.User, "PIXELS_SSH_USER")
 	applyEnv(&cfg.SSH.Key, "PIXELS_SSH_KEY")
 	applyEnv(&cfg.Checkpoint.DatasetPrefix, "PIXELS_CHECKPOINT_DATASET_PREFIX")
+	applyEnvBool(&cfg.Provision.Enabled, "PIXELS_PROVISION_ENABLED")
+	applyEnvBool(&cfg.Provision.DevTools, "PIXELS_PROVISION_DEVTOOLS")
 
 	cfg.SSH.Key = expandHome(cfg.SSH.Key)
+
+	for k, v := range cfg.Env {
+		cfg.Env[k] = os.ExpandEnv(v)
+	}
 
 	return cfg, nil
 }
