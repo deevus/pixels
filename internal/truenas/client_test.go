@@ -2,12 +2,10 @@ package truenas
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 
 	truenas "github.com/deevus/truenas-go"
-	"github.com/deevus/truenas-go/client"
 )
 
 // physicalUp returns a physical, UP interface with the given name and IPv4 alias.
@@ -25,29 +23,20 @@ func physicalUp(name, addr string, mask int) truenas.NetworkInterface {
 	}
 }
 
-// gatewayResponse returns JSON for network.general.summary with the given routes.
-func gatewayResponse(routes ...string) json.RawMessage {
-	v := struct {
-		DefaultRoutes []string `json:"default_routes"`
-	}{DefaultRoutes: routes}
-	b, _ := json.Marshal(v)
-	return b
-}
-
 func TestDefaultNIC(t *testing.T) {
 	tests := []struct {
 		name       string
 		ifaces     []truenas.NetworkInterface
 		ifaceErr   error
-		gateway    json.RawMessage
-		gatewayErr error
+		routes     []string
+		networkErr error
 		wantParent string
 		wantErr    bool
 	}{
 		{
 			name:       "single interface with gateway match",
 			ifaces:     []truenas.NetworkInterface{physicalUp("eno1", "192.168.1.100", 24)},
-			gateway:    gatewayResponse("192.168.1.1"),
+			routes:     []string{"192.168.1.1"},
 			wantParent: "eno1",
 		},
 		{
@@ -56,13 +45,13 @@ func TestDefaultNIC(t *testing.T) {
 				physicalUp("eno1", "192.168.1.100", 24),
 				physicalUp("eno2", "10.0.0.50", 24),
 			},
-			gateway:    gatewayResponse("10.0.0.1"),
+			routes:     []string{"10.0.0.1"},
 			wantParent: "eno2",
 		},
 		{
 			name:       "no gateway falls back to first",
 			ifaces:     []truenas.NetworkInterface{physicalUp("eno1", "192.168.1.100", 24)},
-			gatewayErr: errors.New("api error"),
+			networkErr: errors.New("api error"),
 			wantParent: "eno1",
 		},
 		{
@@ -71,7 +60,7 @@ func TestDefaultNIC(t *testing.T) {
 				physicalUp("eno1", "192.168.1.100", 24),
 				physicalUp("eno2", "10.0.0.50", 24),
 			},
-			gateway:    gatewayResponse("172.16.0.1"),
+			routes:     []string{"172.16.0.1"},
 			wantParent: "eno1",
 		},
 		{
@@ -122,7 +111,7 @@ func TestDefaultNIC(t *testing.T) {
 			ifaces: []truenas.NetworkInterface{
 				physicalUp("eno1", "192.168.1.100", 24),
 			},
-			gateway:    gatewayResponse("fe80::1"),
+			routes:     []string{"fe80::1"},
 			wantParent: "eno1",
 		},
 	}
@@ -135,12 +124,12 @@ func TestDefaultNIC(t *testing.T) {
 						return tt.ifaces, tt.ifaceErr
 					},
 				},
-				ws: &client.MockClient{
-					CallFunc: func(ctx context.Context, method string, params any) (json.RawMessage, error) {
-						if method == "network.general.summary" {
-							return tt.gateway, tt.gatewayErr
+				Network: &truenas.MockNetworkService{
+					GetSummaryFunc: func(ctx context.Context) (*truenas.NetworkSummary, error) {
+						if tt.networkErr != nil {
+							return nil, tt.networkErr
 						}
-						return nil, nil
+						return &truenas.NetworkSummary{DefaultRoutes: tt.routes}, nil
 					},
 				},
 			}
@@ -168,18 +157,21 @@ func TestDefaultNIC(t *testing.T) {
 func TestContainerDataset(t *testing.T) {
 	tests := []struct {
 		name    string
-		resp    string
+		dataset string
+		pool    string
 		wantDS  string
 		wantErr bool
 	}{
 		{
-			name:   "returns dataset path",
-			resp:   `{"pool":"tank","dataset":"tank/ix-virt","storage_pools":["tank"]}`,
-			wantDS: "tank/ix-virt/containers/px-test",
+			name:    "returns dataset path",
+			dataset: "tank/ix-virt",
+			pool:    "tank",
+			wantDS:  "tank/ix-virt/containers/px-test",
 		},
 		{
 			name:    "empty dataset",
-			resp:    `{"pool":"tank","dataset":"","storage_pools":["tank"]}`,
+			dataset: "",
+			pool:    "tank",
 			wantErr: true,
 		},
 	}
@@ -187,12 +179,12 @@ func TestContainerDataset(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Client{
-				ws: &client.MockClient{
-					CallFunc: func(ctx context.Context, method string, params any) (json.RawMessage, error) {
-						if method == "virt.global.config" {
-							return json.RawMessage(tt.resp), nil
-						}
-						return nil, nil
+				Virt: &truenas.MockVirtService{
+					GetGlobalConfigFunc: func(ctx context.Context) (*truenas.VirtGlobalConfig, error) {
+						return &truenas.VirtGlobalConfig{
+							Dataset: tt.dataset,
+							Pool:    tt.pool,
+						}, nil
 					},
 				},
 			}
@@ -215,12 +207,12 @@ func TestContainerDataset(t *testing.T) {
 }
 
 func TestListSnapshots(t *testing.T) {
-	var calledMethod string
+	var calledFilters [][]any
 	c := &Client{
-		ws: &client.MockClient{
-			CallFunc: func(ctx context.Context, method string, params any) (json.RawMessage, error) {
-				calledMethod = method
-				return json.RawMessage(`[]`), nil
+		Snapshot: &truenas.MockSnapshotService{
+			QueryFunc: func(ctx context.Context, filters [][]any) ([]truenas.Snapshot, error) {
+				calledFilters = filters
+				return []truenas.Snapshot{}, nil
 			},
 		},
 	}
@@ -229,7 +221,10 @@ func TestListSnapshots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if calledMethod != "zfs.snapshot.query" {
-		t.Errorf("called %q, want zfs.snapshot.query", calledMethod)
+	if len(calledFilters) != 1 {
+		t.Fatalf("expected 1 filter, got %d", len(calledFilters))
+	}
+	if calledFilters[0][0] != "dataset" || calledFilters[0][1] != "=" || calledFilters[0][2] != "tank/containers/px-test" {
+		t.Errorf("unexpected filter: %v", calledFilters[0])
 	}
 }

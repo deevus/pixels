@@ -2,7 +2,6 @@ package truenas
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -13,13 +12,14 @@ import (
 	"github.com/deevus/pixels/internal/config"
 )
 
-// Client wraps a truenas-go WebSocket client and its services,
-// adding raw API call wrappers for methods not yet in truenas-go.
+// Client wraps a truenas-go WebSocket client and its typed services.
 type Client struct {
-	ws        client.Client
-	Virt      truenas.VirtServiceAPI
-	Snapshot  truenas.SnapshotServiceAPI
-	Interface truenas.InterfaceServiceAPI
+	ws         client.Client
+	Virt       truenas.VirtServiceAPI
+	Snapshot   truenas.SnapshotServiceAPI
+	Interface  truenas.InterfaceServiceAPI
+	Network    truenas.NetworkServiceAPI
+	Filesystem truenas.FilesystemServiceAPI
 }
 
 // Connect creates and connects a TrueNAS WebSocket client.
@@ -41,10 +41,12 @@ func Connect(ctx context.Context, cfg *config.Config) (*Client, error) {
 
 	v := ws.Version()
 	return &Client{
-		ws:        ws,
-		Virt:      truenas.NewVirtService(ws, v),
-		Snapshot:  truenas.NewSnapshotService(ws, v),
-		Interface: truenas.NewInterfaceService(ws, v),
+		ws:         ws,
+		Virt:       truenas.NewVirtService(ws, v),
+		Snapshot:   truenas.NewSnapshotService(ws, v),
+		Interface:  truenas.NewInterfaceService(ws, v),
+		Network:    truenas.NewNetworkService(ws, v),
+		Filesystem: truenas.NewFilesystemService(ws, v),
 	}, nil
 }
 
@@ -52,29 +54,11 @@ func (c *Client) Close() error {
 	return c.ws.Close()
 }
 
-type virtGlobalConfig struct {
-	Pool         string   `json:"pool"`
-	Dataset      string   `json:"dataset"`
-	StoragePools []string `json:"storage_pools"`
-}
-
-func (c *Client) getVirtGlobalConfig(ctx context.Context) (*virtGlobalConfig, error) {
-	result, err := c.ws.Call(ctx, "virt.global.config", nil)
-	if err != nil {
-		return nil, fmt.Errorf("querying virt global config: %w", err)
-	}
-	var gcfg virtGlobalConfig
-	if err := json.Unmarshal(result, &gcfg); err != nil {
-		return nil, fmt.Errorf("parsing virt global config: %w", err)
-	}
-	return &gcfg, nil
-}
-
 // ContainerDataset returns the ZFS dataset path for a container by name.
 func (c *Client) ContainerDataset(ctx context.Context, name string) (string, error) {
-	gcfg, err := c.getVirtGlobalConfig(ctx)
+	gcfg, err := c.Virt.GetGlobalConfig(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("querying virt global config: %w", err)
 	}
 	if gcfg.Dataset == "" {
 		return "", fmt.Errorf("no dataset in virt global config")
@@ -91,7 +75,7 @@ type ProvisionOpts struct {
 // Provision writes SSH keys, rc.local for openssh-server install, and
 // optional DNS config into a running container's rootfs via file_receive.
 func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts) error {
-	gcfg, err := c.getVirtGlobalConfig(ctx)
+	gcfg, err := c.Virt.GetGlobalConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -110,7 +94,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		conf.WriteString(strings.Join(opts.DNS, " "))
 		conf.WriteString("\n")
 		dropinPath := rootfs + "/etc/systemd/resolved.conf.d/pixels-dns.conf"
-		if err := c.ws.WriteFile(ctx, dropinPath, truenas.WriteFileParams{
+		if err := c.Filesystem.WriteFile(ctx, dropinPath, truenas.WriteFileParams{
 			Content: []byte(conf.String()),
 			Mode:    0o644,
 		}); err != nil {
@@ -126,7 +110,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 	// filesystem.mkdir blocks incus paths, but file_receive works and
 	// auto-creates parent directories.
 	sshDir := rootfs + "/root/.ssh"
-	if err := c.ws.WriteFile(ctx, sshDir+"/authorized_keys", truenas.WriteFileParams{
+	if err := c.Filesystem.WriteFile(ctx, sshDir+"/authorized_keys", truenas.WriteFileParams{
 		Content: []byte(opts.SSHPubKey + "\n"),
 		Mode:    0o600,
 	}); err != nil {
@@ -141,7 +125,7 @@ if [ ! -f /root/.ssh-provisioned ]; then
 fi
 exit 0
 `
-	if err := c.ws.WriteFile(ctx, rootfs+"/etc/rc.local", truenas.WriteFileParams{
+	if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/rc.local", truenas.WriteFileParams{
 		Content: []byte(rcLocal),
 		Mode:    0o755,
 	}); err != nil {
@@ -220,14 +204,8 @@ func (c *Client) DefaultNIC(ctx context.Context) (*NICOpts, error) {
 // defaultGateway queries network.general.summary for the default IPv4 gateway.
 // Returns nil if the gateway cannot be determined.
 func (c *Client) defaultGateway(ctx context.Context) net.IP {
-	result, err := c.ws.Call(ctx, "network.general.summary", nil)
+	summary, err := c.Network.GetSummary(ctx)
 	if err != nil {
-		return nil
-	}
-	var summary struct {
-		DefaultRoutes []string `json:"default_routes"`
-	}
-	if err := json.Unmarshal(result, &summary); err != nil {
 		return nil
 	}
 	for _, route := range summary.DefaultRoutes {
@@ -248,77 +226,37 @@ type CreateInstanceOpts struct {
 	NIC *NICOpts
 }
 
-// CreateInstance creates an Incus container via raw API call.
-// This bypasses truenas-go's VirtDeviceOpts which sends empty strings
-// for null-able NIC fields (network), causing validation errors.
+// CreateInstance creates an Incus container via the Virt service.
 func (c *Client) CreateInstance(ctx context.Context, opts CreateInstanceOpts) (*truenas.VirtInstance, error) {
-	params := map[string]any{
-		"name":          opts.Name,
-		"instance_type": "CONTAINER",
-		"image":         opts.Image,
-		"cpu":           opts.CPU,
-		"memory":        opts.Memory,
-		"autostart":     opts.Autostart,
+	createOpts := truenas.CreateVirtInstanceOpts{
+		Name:         opts.Name,
+		InstanceType: "CONTAINER",
+		Image:        opts.Image,
+		CPU:          opts.CPU,
+		Memory:       opts.Memory,
+		Autostart:    opts.Autostart,
 	}
-
 	if opts.NIC != nil {
-		nic := map[string]any{
-			"dev_type": "NIC",
-			"nic_type": opts.NIC.NICType,
-			"parent":   opts.NIC.Parent,
-		}
-		params["devices"] = []map[string]any{nic}
+		createOpts.Devices = []truenas.VirtDeviceOpts{{
+			DevType: "NIC",
+			NICType: opts.NIC.NICType,
+			Parent:  opts.NIC.Parent,
+		}}
 	}
-
-	result, err := c.ws.CallAndWait(ctx, "virt.instance.create", []any{params})
-	if err != nil {
-		return nil, err
-	}
-
-	var instance truenas.VirtInstance
-	if err := json.Unmarshal(result, &instance); err != nil {
-		return nil, fmt.Errorf("parsing created instance: %w", err)
-	}
-	return &instance, nil
+	return c.Virt.CreateInstance(ctx, createOpts)
 }
 
 // ListInstances queries all Incus instances with the px- prefix.
 func (c *Client) ListInstances(ctx context.Context) ([]truenas.VirtInstance, error) {
-	result, err := c.ws.Call(ctx, "virt.instance.query", []any{
-		[][]any{{"name", "^", "px-"}},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("querying instances: %w", err)
-	}
-
-	var instances []truenas.VirtInstance
-	if err := json.Unmarshal(result, &instances); err != nil {
-		return nil, fmt.Errorf("parsing instance list: %w", err)
-	}
-	return instances, nil
+	return c.Virt.ListInstances(ctx, [][]any{{"name", "^", "px-"}})
 }
 
 // ListSnapshots queries snapshots for the given ZFS dataset.
 func (c *Client) ListSnapshots(ctx context.Context, dataset string) ([]truenas.Snapshot, error) {
-	result, err := c.ws.Call(ctx, "zfs.snapshot.query", []any{
-		[][]any{{"dataset", "=", dataset}},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("querying snapshots: %w", err)
-	}
-
-	var snapshots []truenas.Snapshot
-	if err := json.Unmarshal(result, &snapshots); err != nil {
-		return nil, fmt.Errorf("parsing snapshot list: %w", err)
-	}
-	return snapshots, nil
+	return c.Snapshot.Query(ctx, [][]any{{"dataset", "=", dataset}})
 }
 
 // SnapshotRollback rolls back to the given snapshot ID (dataset@name).
 func (c *Client) SnapshotRollback(ctx context.Context, snapshotID string) error {
-	_, err := c.ws.Call(ctx, "zfs.snapshot.rollback", []any{snapshotID})
-	if err != nil {
-		return fmt.Errorf("rolling back snapshot %s: %w", snapshotID, err)
-	}
-	return nil
+	return c.Snapshot.Rollback(ctx, snapshotID)
 }
