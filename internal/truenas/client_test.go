@@ -600,3 +600,178 @@ func TestListSnapshots(t *testing.T) {
 		t.Errorf("unexpected filter: %v", calledFilters[0])
 	}
 }
+
+func TestAuthorizeKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		pool       string
+		pubKey     string
+		configErr  error
+		createErr  error
+		runErr     error
+		deleteErr  error
+		wantErr    bool
+		wantErrMsg string
+		checkCmd   func(t *testing.T, cmd string)
+	}{
+		{
+			name:   "appends key to both authorized_keys files",
+			pool:   "tank",
+			pubKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest user@newmachine",
+			checkCmd: func(t *testing.T, cmd string) {
+				rootfs := "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs"
+				// Should check and append to root's authorized_keys.
+				if !strings.Contains(cmd, rootfs+"/root/.ssh/authorized_keys") {
+					t.Error("command missing root authorized_keys path")
+				}
+				// Should check and append to pixel's authorized_keys.
+				if !strings.Contains(cmd, rootfs+"/home/pixel/.ssh/authorized_keys") {
+					t.Error("command missing pixel authorized_keys path")
+				}
+				// Should use grep -qF for deduplication.
+				if !strings.Contains(cmd, "grep -qF") {
+					t.Error("command missing grep dedup check")
+				}
+				// Should contain the public key.
+				if !strings.Contains(cmd, "ssh-ed25519") {
+					t.Error("command missing SSH public key")
+				}
+			},
+		},
+		{
+			name:       "rejects key with single quote",
+			pool:       "tank",
+			pubKey:     "ssh-ed25519 AAAA it's-a-trap",
+			wantErr:    true,
+			wantErrMsg: "unsafe character",
+		},
+		{
+			name:       "rejects key with newline",
+			pool:       "tank",
+			pubKey:     "ssh-ed25519 AAAA\nmalicious",
+			wantErr:    true,
+			wantErrMsg: "unsafe character",
+		},
+		{
+			name:       "rejects empty key",
+			pool:       "tank",
+			pubKey:     "",
+			wantErr:    true,
+			wantErrMsg: "empty",
+		},
+		{
+			name:      "global config error",
+			pubKey:    "ssh-ed25519 AAAA test@host",
+			configErr: errors.New("api failure"),
+			wantErr:   true,
+		},
+		{
+			name:       "empty pool",
+			pool:       "",
+			pubKey:     "ssh-ed25519 AAAA test@host",
+			wantErr:    true,
+			wantErrMsg: "no pool",
+		},
+		{
+			name:      "cron create error",
+			pool:      "tank",
+			pubKey:    "ssh-ed25519 AAAA test@host",
+			createErr: errors.New("permission denied"),
+			wantErr:   true,
+		},
+		{
+			name:    "cron run error",
+			pool:    "tank",
+			pubKey:  "ssh-ed25519 AAAA test@host",
+			runErr:  errors.New("script failed"),
+			wantErr: true,
+		},
+		{
+			name:      "cron delete error is ignored",
+			pool:      "tank",
+			pubKey:    "ssh-ed25519 AAAA test@host",
+			deleteErr: errors.New("cleanup failed"),
+			wantErr:   false, // delete errors are deferred and swallowed
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedCmd string
+			var cronCreated, cronRun, cronDeleted bool
+
+			c := &Client{
+				Virt: &truenas.MockVirtService{
+					GetGlobalConfigFunc: func(ctx context.Context) (*truenas.VirtGlobalConfig, error) {
+						if tt.configErr != nil {
+							return nil, tt.configErr
+						}
+						return &truenas.VirtGlobalConfig{Pool: tt.pool}, nil
+					},
+				},
+				Cron: &truenas.MockCronService{
+					CreateFunc: func(ctx context.Context, opts truenas.CreateCronJobOpts) (*truenas.CronJob, error) {
+						if tt.createErr != nil {
+							return nil, tt.createErr
+						}
+						cronCreated = true
+						capturedCmd = opts.Command
+						if opts.User != "root" {
+							t.Errorf("cron user = %q, want root", opts.User)
+						}
+						if opts.Enabled {
+							t.Error("cron job should be created disabled")
+						}
+						return &truenas.CronJob{ID: 99}, nil
+					},
+					RunFunc: func(ctx context.Context, id int64, skipDisabled bool) error {
+						cronRun = true
+						if id != 99 {
+							t.Errorf("run id = %d, want 99", id)
+						}
+						if skipDisabled {
+							t.Error("skipDisabled should be false")
+						}
+						return tt.runErr
+					},
+					DeleteFunc: func(ctx context.Context, id int64) error {
+						cronDeleted = true
+						if id != 99 {
+							t.Errorf("delete id = %d, want 99", id)
+						}
+						return tt.deleteErr
+					},
+				},
+			}
+
+			err := c.AuthorizeKey(context.Background(), "px-test", tt.pubKey)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.wantErrMsg != "" && !strings.Contains(err.Error(), tt.wantErrMsg) {
+					t.Errorf("error %q should contain %q", err.Error(), tt.wantErrMsg)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if !cronCreated {
+				t.Error("cron job was not created")
+			}
+			if !cronRun {
+				t.Error("cron job was not run")
+			}
+			if !cronDeleted {
+				t.Error("cron job was not deleted (cleanup)")
+			}
+
+			if tt.checkCmd != nil {
+				tt.checkCmd(t, capturedCmd)
+			}
+		})
+	}
+}

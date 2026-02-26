@@ -86,6 +86,21 @@ func newTabWriter(cmd *cobra.Command) *tabwriter.Writer {
 	return tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 }
 
+// readSSHPubKey reads the SSH public key from the path configured in ssh.key.
+// It derives the .pub path from the private key path.
+func readSSHPubKey() (string, error) {
+	keyPath := cfg.SSH.Key
+	if keyPath == "" {
+		return "", nil
+	}
+	pubPath := keyPath + ".pub"
+	data, err := os.ReadFile(pubPath)
+	if err != nil {
+		return "", fmt.Errorf("reading SSH public key %s: %w", pubPath, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
 func formatBytes(b int64) string {
 	const unit = 1024
 	if b < unit {

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -250,19 +249,4 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-// readSSHPubKey reads the SSH public key from the path configured in ssh.key.
-// It derives the .pub path from the private key path.
-func readSSHPubKey() (string, error) {
-	keyPath := cfg.SSH.Key
-	if keyPath == "" {
-		return "", nil
-	}
-	pubPath := keyPath + ".pub"
-	data, err := os.ReadFile(pubPath)
-	if err != nil {
-		return "", fmt.Errorf("reading SSH public key %s: %w", pubPath, err)
-	}
-	return strings.TrimSpace(string(data)), nil
 }
