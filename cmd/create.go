@@ -25,6 +25,7 @@ func init() {
 	cmd.Flags().String("cpu", "", "CPU cores (default from config)")
 	cmd.Flags().Int64("memory", 0, "memory in MiB (default from config)")
 	cmd.Flags().Bool("no-provision", false, "skip all provisioning")
+	cmd.Flags().Bool("console", false, "wait for provisioning and open console")
 	rootCmd.AddCommand(cmd)
 }
 
@@ -142,9 +143,23 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "  IP:       %s\n", ip)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  Console:  pixels console %s\n", name)
-	if provisionEnabled && cfg.Provision.DevToolsEnabled() {
+	openConsole, _ := cmd.Flags().GetBool("console")
+	devToolsActive := provisionEnabled && cfg.Provision.DevToolsEnabled()
+
+	if devToolsActive && !openConsole {
 		fmt.Fprintf(cmd.OutOrStdout(), "  Dev tools installing in background (sudo journalctl -fu pixels-devtools)\n")
 	}
+
+	if openConsole && ip != "" {
+		if devToolsActive {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Waiting for dev tools to finish installing...\n")
+			if err := ssh.WaitProvisioned(ctx, ip, cfg.SSH.User, cfg.SSH.Key, 10*time.Minute); err != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", err)
+			}
+		}
+		return ssh.Console(ip, cfg.SSH.User, cfg.SSH.Key)
+	}
+
 	return nil
 }
 
