@@ -2,6 +2,7 @@ package truenas
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -393,6 +394,82 @@ func (c *Client) ListSnapshots(ctx context.Context, dataset string) ([]truenas.S
 // SnapshotRollback rolls back to the given snapshot ID (dataset@name).
 func (c *Client) SnapshotRollback(ctx context.Context, snapshotID string) error {
 	return c.Snapshot.Rollback(ctx, snapshotID)
+}
+
+// ReplaceContainerRootfs destroys the container's ZFS dataset and clones
+// the checkpoint snapshot in its place. The container must be stopped.
+//
+// The pool.dataset.* APIs can't see .ix-virt managed datasets, so we use
+// a temporary cron job to run raw ZFS commands on the host as root.
+func (c *Client) ReplaceContainerRootfs(ctx context.Context, containerName, snapshotID string) error {
+	gcfg, err := c.Virt.GetGlobalConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("querying virt global config: %w", err)
+	}
+	if gcfg.Dataset == "" {
+		return fmt.Errorf("no dataset in virt global config")
+	}
+	dstDataset := gcfg.Dataset + "/containers/" + containerName
+
+	// Validate paths contain only safe characters (alphanumeric, .-_/@).
+	for _, p := range []string{dstDataset, snapshotID} {
+		for _, ch := range p {
+			if !isZFSPathChar(ch) {
+				return fmt.Errorf("unsafe character %q in ZFS path %q", string(ch), p)
+			}
+		}
+	}
+
+	cmd := fmt.Sprintf(
+		"/usr/sbin/zfs destroy -r %s && /usr/sbin/zfs clone %s %s"+
+			" && tmp=$(mktemp -d) && mount -t zfs %s \"$tmp\""+
+			" && echo '%s' > \"$tmp/rootfs/etc/hostname\""+
+			" && umount \"$tmp\" && rmdir \"$tmp\"",
+		dstDataset, snapshotID, dstDataset, dstDataset, containerName,
+	)
+
+	// Create a disabled cron job — we run it manually, then delete it.
+	result, err := c.ws.Call(ctx, "cronjob.create", map[string]any{
+		"command":     cmd,
+		"user":        "root",
+		"description": "pixels: clone checkpoint (temporary)",
+		"enabled":     false,
+		"schedule": map[string]any{
+			"minute": "00",
+			"hour":   "00",
+			"dom":    "1",
+			"month":  "1",
+			"dow":    "1",
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("creating temp cron job: %w", err)
+	}
+
+	// Extract the cron job ID from the response.
+	var created struct{ ID int64 `json:"id"` }
+	if err := json.Unmarshal(result, &created); err != nil {
+		return fmt.Errorf("parsing cron job response: %w", err)
+	}
+
+	// Always clean up the cron job, even if run fails.
+	defer func() {
+		_, _ = c.ws.Call(ctx, "cronjob.delete", created.ID)
+	}()
+
+	// Run the cron job and wait for completion.
+	_, err = c.ws.CallAndWait(ctx, "cronjob.run", created.ID)
+	if err != nil {
+		return fmt.Errorf("running ZFS clone: %w", err)
+	}
+
+	return nil
+}
+
+// isZFSPathChar returns true if the rune is valid in a ZFS dataset/snapshot path.
+func isZFSPathChar(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+		r == '/' || r == '-' || r == '_' || r == '.' || r == '@'
 }
 
 func intPtr(v int) *int { return &v }
