@@ -49,14 +49,19 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		memory = cfg.Defaults.Memory
 	}
 
-	// Parse --from flag: "container:label"
+	// Parse --from flag: "container" or "container:label"
 	var fromSource, fromLabel string
+	var tempSnapshot bool
 	if from != "" {
-		parts := strings.SplitN(from, ":", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-			return fmt.Errorf("--from must be in the form container:label (e.g. --from base:ready)")
+		if parts := strings.SplitN(from, ":", 2); len(parts) == 2 {
+			if parts[0] == "" || parts[1] == "" {
+				return fmt.Errorf("--from must be container or container:label (e.g. --from base or --from base:ready)")
+			}
+			fromSource, fromLabel = parts[0], parts[1]
+		} else {
+			fromSource = from
+			tempSnapshot = true
 		}
-		fromSource, fromLabel = parts[0], parts[1]
 	}
 
 	client, err := connectClient(ctx)
@@ -67,7 +72,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	start := time.Now()
 
-	// When cloning from a checkpoint, verify it exists before creating
+	// When cloning from a checkpoint, verify/create it before creating
 	// the container so we fail fast without leaving anything to clean up.
 	skipProvision := fromSource != ""
 	var snapshotID string
@@ -76,14 +81,31 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("resolving source dataset: %w", err)
 		}
+
+		if tempSnapshot {
+			// Auto-snapshot the source container's current state.
+			fromLabel = "px-clone-" + time.Now().Format("20060102-150405")
+			if _, err := client.Snapshot.Create(ctx, truenas.CreateSnapshotOpts{
+				Dataset: srcDS,
+				Name:    fromLabel,
+			}); err != nil {
+				return fmt.Errorf("snapshotting %s: %w", fromSource, err)
+			}
+			defer func() {
+				_ = client.Snapshot.Delete(ctx, srcDS+"@"+fromLabel)
+			}()
+		}
+
 		snapshotID = srcDS + "@" + fromLabel
 
-		snap, err := client.Snapshot.Get(ctx, snapshotID)
-		if err != nil {
-			return fmt.Errorf("looking up checkpoint: %w", err)
-		}
-		if snap == nil {
-			return fmt.Errorf("checkpoint %q not found for %s", fromLabel, fromSource)
+		if !tempSnapshot {
+			snap, err := client.Snapshot.Get(ctx, snapshotID)
+			if err != nil {
+				return fmt.Errorf("looking up checkpoint: %w", err)
+			}
+			if snap == nil {
+				return fmt.Errorf("checkpoint %q not found for %s", fromLabel, fromSource)
+			}
 		}
 	}
 
@@ -120,7 +142,11 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	// and clone the checkpoint snapshot in its place via a temporary cron job
 	// (pool.dataset.* APIs can't see .ix-virt managed datasets).
 	if skipProvision {
-		fmt.Fprintf(cmd.ErrOrStderr(), "Cloning from %s checkpoint %q...\n", fromSource, fromLabel)
+		if tempSnapshot {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Cloning from %s...\n", fromSource)
+		} else {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Cloning from %s checkpoint %q...\n", fromSource, fromLabel)
+		}
 
 		if err := client.Virt.StopInstance(ctx, containerName(name), truenas.StopVirtInstanceOpts{Timeout: 30}); err != nil {
 			return fmt.Errorf("stopping %s for clone: %w", name, err)
