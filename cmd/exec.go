@@ -25,22 +25,19 @@ func runExec(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	command := args[1:]
 
-	pubKey, _ := readSSHPubKey()
+	client, err := connectClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
 
-	// Fast path: cache hit with matching SSH key — no TrueNAS connection needed.
+	// Use cached IP if available, otherwise fetch from API.
 	var ip string
-	cached := cache.Get(name)
-	if cached != nil && cached.IP != "" && cached.Status == "RUNNING" && cached.SSHPubKey == pubKey {
+	if cached := cache.Get(name); cached != nil && cached.IP != "" && cached.Status == "RUNNING" {
 		ip = cached.IP
 	}
 
 	if ip == "" {
-		client, err := connectClient(ctx)
-		if err != nil {
-			return err
-		}
-		defer client.Close()
-
 		instance, err := client.Virt.GetInstance(ctx, containerName(name))
 		if err != nil {
 			return fmt.Errorf("looking up %s: %w", name, err)
@@ -56,15 +53,14 @@ func runExec(cmd *cobra.Command, args []string) error {
 		if ip == "" {
 			return fmt.Errorf("no IP address for %s", name)
 		}
+		cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
+	}
 
-		// Write SSH key if configured (ensures this machine is authorized).
-		if pubKey != "" {
-			if err := client.WriteAuthorizedKey(ctx, containerName(name), pubKey); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: writing SSH key: %v\n", err)
-			}
+	// Write SSH key if configured (ensures this machine is authorized).
+	if pubKey, _ := readSSHPubKey(); pubKey != "" {
+		if err := client.WriteAuthorizedKey(ctx, containerName(name), pubKey); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: writing SSH key: %v\n", err)
 		}
-
-		cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status, SSHPubKey: pubKey})
 	}
 
 	if err := ssh.WaitReady(ctx, ip, 30*time.Second); err != nil {

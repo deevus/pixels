@@ -8,9 +8,8 @@ import (
 
 // Entry holds cached state for a pixel.
 type Entry struct {
-	IP        string `json:"ip"`
-	Status    string `json:"status"`
-	SSHPubKey string `json:"ssh_pub_key,omitempty"`
+	IP     string `json:"ip"`
+	Status string `json:"status"`
 }
 
 // dir returns the cache directory path.

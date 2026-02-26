@@ -164,8 +164,7 @@ func runCheckpointRestore(cmd *cobra.Command, args []string) error {
 	}
 
 	ip := resolveIP(instance)
-	pubKey, _ := readSSHPubKey()
-	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status, SSHPubKey: pubKey})
+	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
 	if ip != "" {
 		if err := ssh.WaitReady(ctx, ip, 30*time.Second); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: SSH not ready: %v\n", err)
