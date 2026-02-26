@@ -23,19 +23,19 @@ func runConsole(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	name := args[0]
 
-	client, err := connectClient(ctx)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-
-	// Use cached IP if available, otherwise fetch from API.
+	// Try local cache first for fast path (already running).
 	var ip string
 	if cached := cache.Get(name); cached != nil && cached.IP != "" && cached.Status == "RUNNING" {
 		ip = cached.IP
 	}
 
 	if ip == "" {
+		client, err := connectClient(ctx)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+
 		instance, err := client.Virt.GetInstance(ctx, containerName(name))
 		if err != nil {
 			return fmt.Errorf("looking up %s: %w", name, err)
@@ -62,15 +62,16 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
 	}
 
-	// Write SSH key if configured (ensures this machine is authorized).
-	if pubKey, _ := readSSHPubKey(); pubKey != "" {
-		if err := client.WriteAuthorizedKey(ctx, containerName(name), pubKey); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: writing SSH key: %v\n", err)
-		}
-	}
-
 	if err := ssh.WaitReady(ctx, ip, 30*time.Second); err != nil {
 		return fmt.Errorf("waiting for SSH: %w", err)
+	}
+
+	// Test key auth before exec (syscall.Exec can't retry).
+	// If auth fails, write the current machine's key and retest.
+	if err := ssh.TestAuth(ctx, ip, cfg.SSH.User, cfg.SSH.Key); err != nil {
+		if writeErr := writeSSHKey(cmd, ctx, name); writeErr != nil {
+			return writeErr
+		}
 	}
 
 	// Console replaces the process — does not return on success.

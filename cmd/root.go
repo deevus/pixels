@@ -101,6 +101,28 @@ func readSSHPubKey() (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+// writeSSHKey connects to TrueNAS and writes the current machine's SSH
+// public key to the container's authorized_keys. Called when key auth fails.
+func writeSSHKey(cmd *cobra.Command, ctx context.Context, name string) error {
+	pubKey, err := readSSHPubKey()
+	if err != nil {
+		return err
+	}
+	if pubKey == "" {
+		return fmt.Errorf("SSH key auth failed and no public key configured")
+	}
+
+	fmt.Fprintf(cmd.ErrOrStderr(), "SSH key not authorized, updating...\n")
+
+	client, err := connectClient(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	return client.WriteAuthorizedKey(ctx, containerName(name), pubKey)
+}
+
 func formatBytes(b int64) string {
 	const unit = 1024
 	if b < unit {

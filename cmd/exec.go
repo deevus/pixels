@@ -25,19 +25,19 @@ func runExec(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	command := args[1:]
 
-	client, err := connectClient(ctx)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
-
-	// Use cached IP if available, otherwise fetch from API.
+	// Try local cache first to avoid the WebSocket round-trip.
 	var ip string
 	if cached := cache.Get(name); cached != nil && cached.IP != "" && cached.Status == "RUNNING" {
 		ip = cached.IP
 	}
 
 	if ip == "" {
+		client, err := connectClient(ctx)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+
 		instance, err := client.Virt.GetInstance(ctx, containerName(name))
 		if err != nil {
 			return fmt.Errorf("looking up %s: %w", name, err)
@@ -56,15 +56,15 @@ func runExec(cmd *cobra.Command, args []string) error {
 		cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
 	}
 
-	// Write SSH key if configured (ensures this machine is authorized).
-	if pubKey, _ := readSSHPubKey(); pubKey != "" {
-		if err := client.WriteAuthorizedKey(ctx, containerName(name), pubKey); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: writing SSH key: %v\n", err)
-		}
-	}
-
 	if err := ssh.WaitReady(ctx, ip, 30*time.Second); err != nil {
 		return fmt.Errorf("waiting for SSH: %w", err)
+	}
+
+	// Test key auth first. If it fails, write the current machine's key and retry.
+	if err := ssh.TestAuth(ctx, ip, cfg.SSH.User, cfg.SSH.Key); err != nil {
+		if writeErr := writeSSHKey(cmd, ctx, name); writeErr != nil {
+			return writeErr
+		}
 	}
 
 	exitCode, err := ssh.Exec(ctx, ip, cfg.SSH.User, cfg.SSH.Key, command)
