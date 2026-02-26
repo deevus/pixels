@@ -2,7 +2,6 @@ package truenas
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -21,6 +20,7 @@ type Client struct {
 	Interface  truenas.InterfaceServiceAPI
 	Network    truenas.NetworkServiceAPI
 	Filesystem truenas.FilesystemServiceAPI
+	Cron       truenas.CronServiceAPI
 }
 
 // Connect creates and connects a TrueNAS WebSocket client.
@@ -48,6 +48,7 @@ func Connect(ctx context.Context, cfg *config.Config) (*Client, error) {
 		Interface:  truenas.NewInterfaceService(ws, v),
 		Network:    truenas.NewNetworkService(ws, v),
 		Filesystem: truenas.NewFilesystemService(ws, v),
+		Cron:       truenas.NewCronService(ws, v),
 	}, nil
 }
 
@@ -429,37 +430,30 @@ func (c *Client) ReplaceContainerRootfs(ctx context.Context, containerName, snap
 	)
 
 	// Create a disabled cron job — we run it manually, then delete it.
-	result, err := c.ws.Call(ctx, "cronjob.create", map[string]any{
-		"command":     cmd,
-		"user":        "root",
-		"description": "pixels: clone checkpoint (temporary)",
-		"enabled":     false,
-		"schedule": map[string]any{
-			"minute": "00",
-			"hour":   "00",
-			"dom":    "1",
-			"month":  "1",
-			"dow":    "1",
+	job, err := c.Cron.Create(ctx, truenas.CreateCronJobOpts{
+		Command:     cmd,
+		User:        "root",
+		Description: "pixels: clone checkpoint (temporary)",
+		Enabled:     false,
+		Schedule: truenas.Schedule{
+			Minute: "00",
+			Hour:   "00",
+			Dom:    "1",
+			Month:  "1",
+			Dow:    "1",
 		},
 	})
 	if err != nil {
 		return fmt.Errorf("creating temp cron job: %w", err)
 	}
 
-	// Extract the cron job ID from the response.
-	var created struct{ ID int64 `json:"id"` }
-	if err := json.Unmarshal(result, &created); err != nil {
-		return fmt.Errorf("parsing cron job response: %w", err)
-	}
-
 	// Always clean up the cron job, even if run fails.
 	defer func() {
-		_, _ = c.ws.Call(ctx, "cronjob.delete", created.ID)
+		_ = c.Cron.Delete(ctx, job.ID)
 	}()
 
 	// Run the cron job and wait for completion.
-	_, err = c.ws.CallAndWait(ctx, "cronjob.run", created.ID)
-	if err != nil {
+	if err := c.Cron.Run(ctx, job.ID, false); err != nil {
 		return fmt.Errorf("running ZFS clone: %w", err)
 	}
 
