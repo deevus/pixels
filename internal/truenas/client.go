@@ -10,6 +10,7 @@ import (
 	"github.com/deevus/truenas-go/client"
 
 	"github.com/deevus/pixels/internal/config"
+	"github.com/deevus/pixels/internal/egress"
 )
 
 // Client wraps a truenas-go WebSocket client and its typed services.
@@ -70,10 +71,12 @@ func (c *Client) ContainerDataset(ctx context.Context, name string) (string, err
 
 // ProvisionOpts contains options for provisioning a container.
 type ProvisionOpts struct {
-	SSHPubKey string
-	DNS       []string          // nameservers (e.g. ["1.1.1.1", "8.8.8.8"])
-	Env       map[string]string // environment variables to inject into /etc/environment
-	DevTools  bool              // whether to install dev tools (mise, claude-code, codex, opencode)
+	SSHPubKey   string
+	DNS         []string          // nameservers (e.g. ["1.1.1.1", "8.8.8.8"])
+	Env         map[string]string // environment variables to inject into /etc/environment
+	DevTools    bool              // whether to install dev tools (mise, claude-code, codex, opencode)
+	Egress      string            // "unrestricted", "agent", or "allowlist"
+	EgressAllow []string          // custom domains (merged into agent, standalone for allowlist)
 }
 
 // Provision writes SSH keys, rc.local for openssh-server install, dev tools
@@ -162,11 +165,45 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		}
 	}
 
+	// Write egress control files when egress mode is restricted.
+	isRestricted := opts.Egress == "agent" || opts.Egress == "allowlist"
+	if isRestricted {
+		domains := egress.ResolveDomains(opts.Egress, opts.EgressAllow)
+		if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/pixels-egress-domains", truenas.WriteFileParams{
+			Content: []byte(egress.DomainsFileContent(domains)),
+			Mode:    0o644,
+		}); err != nil {
+			return fmt.Errorf("writing egress domains: %w", err)
+		}
+		if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/nftables.conf", truenas.WriteFileParams{
+			Content: []byte(egress.NftablesConf()),
+			Mode:    0o644,
+		}); err != nil {
+			return fmt.Errorf("writing nftables.conf: %w", err)
+		}
+		if err := c.Filesystem.WriteFile(ctx, rootfs+"/usr/local/bin/pixels-resolve-egress.sh", truenas.WriteFileParams{
+			Content: []byte(egress.ResolveScript()),
+			Mode:    0o755,
+		}); err != nil {
+			return fmt.Errorf("writing egress resolve script: %w", err)
+		}
+		if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/sudoers.d/pixel", truenas.WriteFileParams{
+			Content: []byte(egress.SudoersRestricted()),
+			Mode:    0o440,
+		}); err != nil {
+			return fmt.Errorf("writing restricted sudoers: %w", err)
+		}
+	}
+
 	// Write rc.local — systemd-rc-local-generator automatically creates and
 	// starts rc-local.service if /etc/rc.local exists and is executable.
 	if opts.SSHPubKey != "" {
 		rcLocal := rcLocalSSH
-		if opts.DevTools {
+		if isRestricted && opts.DevTools {
+			rcLocal = rcLocalSSHDevtoolsEgress
+		} else if isRestricted {
+			rcLocal = rcLocalSSHEgress
+		} else if opts.DevTools {
 			rcLocal = rcLocalSSHDevtools
 		}
 		if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/rc.local", truenas.WriteFileParams{
@@ -229,6 +266,60 @@ if [ ! -f /root/.ssh-provisioned ]; then
     chmod 700 /home/pixel/.ssh
 
     systemctl enable --now ssh
+    touch /root/.ssh-provisioned
+fi
+if [ -f /etc/systemd/system/pixels-devtools.service ] && [ ! -f /root/.devtools-provisioned ]; then
+    systemctl daemon-reload
+    systemctl start pixels-devtools.service
+fi
+exit 0
+`
+
+const rcLocalSSHEgress = `#!/bin/sh
+set -e
+if [ ! -f /root/.ssh-provisioned ]; then
+    apt-get update -qq
+    apt-get install -y -qq openssh-server sudo nftables dnsutils
+
+    if ! id pixel >/dev/null 2>&1; then
+        userdel -r ubuntu 2>/dev/null || true
+        groupdel ubuntu 2>/dev/null || true
+        groupadd -g 1000 pixel
+        useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel
+    fi
+    cp -rn /etc/skel/. /home/pixel/
+    mkdir -p /home/pixel/.ssh
+
+    chown -R pixel:pixel /home/pixel
+    chmod 700 /home/pixel/.ssh
+
+    systemctl enable --now ssh
+    /usr/local/bin/pixels-resolve-egress.sh
+    touch /root/.ssh-provisioned
+fi
+exit 0
+`
+
+const rcLocalSSHDevtoolsEgress = `#!/bin/sh
+set -e
+if [ ! -f /root/.ssh-provisioned ]; then
+    apt-get update -qq
+    apt-get install -y -qq openssh-server sudo nftables dnsutils
+
+    if ! id pixel >/dev/null 2>&1; then
+        userdel -r ubuntu 2>/dev/null || true
+        groupdel ubuntu 2>/dev/null || true
+        groupadd -g 1000 pixel
+        useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel
+    fi
+    cp -rn /etc/skel/. /home/pixel/
+    mkdir -p /home/pixel/.ssh
+
+    chown -R pixel:pixel /home/pixel
+    chmod 700 /home/pixel/.ssh
+
+    systemctl enable --now ssh
+    /usr/local/bin/pixels-resolve-egress.sh
     touch /root/.ssh-provisioned
 fi
 if [ -f /etc/systemd/system/pixels-devtools.service ] && [ ! -f /root/.devtools-provisioned ]; then
