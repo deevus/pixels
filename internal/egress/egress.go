@@ -17,13 +17,15 @@ func AgentDomains() []string {
 		"static.crates.io",
 		"proxy.golang.org",
 		"sum.golang.org",
-		// Git
+		// Git + GitHub release CDN
 		"github.com",
 		"api.github.com",
 		"gitlab.com",
 		"objects.githubusercontent.com",
 		"raw.githubusercontent.com",
 		"codeload.github.com",
+		"github-releases.githubusercontent.com",
+		"tmaproduction.blob.core.windows.net",
 		// Tools
 		"mise.run",
 		"mise.jdx.dev",
