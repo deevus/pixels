@@ -228,8 +228,8 @@ host = "truenas.local"
 # image = "ubuntu/24.04"     # default
 # cpu = "2"                  # default
 # memory = 2048              # MiB, default
-# pool = "tank"              # default
-# dns = ["1.1.1.1", "8.8.8.8"]
+# pool = "tank"              # discovered from server; override if needed
+# dns = ["1.1.1.1"]          # optional; nameservers to inject into containers
 
 [ssh]
 # user = "pixel"             # default
@@ -276,7 +276,7 @@ host = "truenas.local"
 
 ## Security
 
-Container egress filtering uses nftables rules inside the container. A root process with `cap_net_admin` could bypass these rules. The `pixel` user has restricted sudo that only permits safe-apt, systemctl, nft, and dpkg-query.
+Container egress filtering uses nftables rules inside the container. A root process with `cap_net_admin` could bypass these rules. The `pixel` user has restricted sudo that only permits safe-apt, dpkg-query, systemctl, journalctl, and nft list.
 
 See [SECURITY.md](SECURITY.md) for the full threat model, known issues, and mitigations.
 
