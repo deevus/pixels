@@ -144,8 +144,9 @@ func runNetworkSet(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Ensure egress infrastructure exists (nftables, resolve script, etc.).
-	if err := ensureEgressFiles(cmd, nc.ip, nc.client, cname); err != nil {
+	// Always write nftables.conf and resolve script — ensures the latest
+	// rules are applied when switching modes or after binary updates.
+	if err := writeEgressInfra(cmd, nc.ip, nc.client, cname); err != nil {
 		return err
 	}
 
@@ -270,16 +271,9 @@ func runNetworkDeny(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// ensureEgressFiles writes the nftables config and resolve script if not already
-// present. This allows `network allow` to work on containers that were created
-// without egress configured.
-func ensureEgressFiles(cmd *cobra.Command, ip string, client *tnc.Client, cname string) error {
-	// Check if resolve script already exists.
-	checkCode, _ := sshAsRoot(cmd, ip, []string{"test", "-f", "/usr/local/bin/pixels-resolve-egress.sh"})
-	if checkCode == 0 {
-		return nil // already provisioned
-	}
-
+// writeEgressInfra writes nftables.conf and the resolve script unconditionally.
+// Called by `network set` to ensure the latest rules are always applied.
+func writeEgressInfra(cmd *cobra.Command, ip string, client *tnc.Client, cname string) error {
 	ctx := cmd.Context()
 
 	// Write nftables.conf via TrueNAS API.
@@ -300,4 +294,15 @@ func ensureEgressFiles(cmd *cobra.Command, ip string, client *tnc.Client, cname 
 	sshAsRoot(cmd, ip, []string{"bash", "-c", "touch /etc/pixels-egress-domains"})
 
 	return nil
+}
+
+// ensureEgressFiles writes the nftables config and resolve script if not already
+// present. This allows `network allow` to work on containers that were created
+// without egress configured.
+func ensureEgressFiles(cmd *cobra.Command, ip string, client *tnc.Client, cname string) error {
+	checkCode, _ := sshAsRoot(cmd, ip, []string{"test", "-f", "/usr/local/bin/pixels-resolve-egress.sh"})
+	if checkCode == 0 {
+		return nil // already provisioned
+	}
+	return writeEgressInfra(cmd, ip, client, cname)
 }

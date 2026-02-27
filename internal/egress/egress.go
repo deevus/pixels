@@ -28,6 +28,8 @@ func AgentDomains() []string {
 		"tmaproduction.blob.core.windows.net",
 		// Sigstore (GitHub release attestation verification)
 		"tuf-repo-cdn.sigstore.dev",
+		// SDK / tool downloads
+		"dl.google.com",
 		// Tools
 		"mise.run",
 		"mise.jdx.dev",
