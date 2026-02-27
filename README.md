@@ -12,6 +12,7 @@ Spin up sandboxed Linux containers pre-loaded with AI coding tools (Claude Code,
 - **AI agent provisioning** -- automatically installs mise, Claude Code, Codex, and OpenCode
 - **Network egress policies** -- restrict outbound traffic to AI APIs, package registries, and Git (or a custom allowlist)
 - **Configuration** -- TOML config file, `PIXELS_*` environment variables, and CLI flags
+- **Network accessible** -- each container gets its own IP, reachable from the host for running and accessing services
 - **Local caching** -- disk cache avoids WebSocket round-trips for console/exec
 
 ## Prerequisites
