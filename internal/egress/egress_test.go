@@ -116,8 +116,11 @@ func TestDomainsFileContent(t *testing.T) {
 
 func TestSudoersRestricted(t *testing.T) {
 	s := SudoersRestricted()
-	if !strings.Contains(s, "/usr/bin/apt-get") {
-		t.Error("missing apt-get allowlist")
+	if strings.Contains(s, "/usr/bin/apt-get") {
+		t.Error("should not allow apt-get directly (use safe-apt wrapper)")
+	}
+	if !strings.Contains(s, "/usr/local/bin/safe-apt") {
+		t.Error("missing safe-apt wrapper allowlist")
 	}
 	if !strings.Contains(s, "/usr/bin/journalctl") {
 		t.Error("missing journalctl allowlist")

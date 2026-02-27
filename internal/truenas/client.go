@@ -228,6 +228,12 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		}); err != nil {
 			return fmt.Errorf("writing egress resolve script: %w", err)
 		}
+		if err := c.Filesystem.WriteFile(ctx, rootfs+"/usr/local/bin/safe-apt", truenas.WriteFileParams{
+			Content: []byte(egress.SafeAptScript()),
+			Mode:    0o755,
+		}); err != nil {
+			return fmt.Errorf("writing safe-apt wrapper: %w", err)
+		}
 		if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/sudoers.d/pixel", truenas.WriteFileParams{
 			Content: []byte(egress.SudoersRestricted()),
 			Mode:    0o440,

@@ -364,7 +364,7 @@ func TestProvision(t *testing.T) {
 				Egress:    "agent",
 			},
 			pool:      "tank",
-			wantCalls: 8, // root key + pixel key + domains + cidrs + nftables.conf + resolve script + sudoers + rc.local
+			wantCalls: 9, // root key + pixel key + domains + cidrs + nftables.conf + resolve script + safe-apt + sudoers + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				paths := make(map[string]writeCall)
 				for _, c := range calls {
@@ -395,8 +395,8 @@ func TestProvision(t *testing.T) {
 				if strings.Contains(sudoers.content, "NOPASSWD: ALL") {
 					t.Error("sudoers should be restricted, not blanket ALL")
 				}
-				if !strings.Contains(sudoers.content, "/usr/bin/apt-get") {
-					t.Error("sudoers missing apt-get allowlist")
+				if !strings.Contains(sudoers.content, "/usr/local/bin/safe-apt") {
+					t.Error("sudoers missing safe-apt allowlist")
 				}
 
 				// rc.local should include nftables setup.
@@ -433,7 +433,7 @@ func TestProvision(t *testing.T) {
 				EgressAllow: []string{"custom.example.com"},
 			},
 			pool:      "tank",
-			wantCalls: 7, // root key + pixel key + domains + nftables.conf + resolve script + sudoers + rc.local
+			wantCalls: 8, // root key + pixel key + domains + nftables.conf + resolve script + safe-apt + sudoers + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				rootfs := "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs"
 				for _, c := range calls {

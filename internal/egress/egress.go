@@ -155,10 +155,48 @@ echo "Egress rules loaded"
 `
 }
 
+// SafeAptScript returns a wrapper script that sanitizes apt-get arguments,
+// blocking -o flags (which allow arbitrary command execution via Pre-Invoke)
+// and restricting to safe subcommands.
+func SafeAptScript() string {
+	return `#!/bin/bash
+# Safe apt wrapper — blocks -o flags to prevent Pre-Invoke escalation.
+set -eu
+
+allowed_cmds="install|update|remove|autoremove|upgrade|dist-upgrade|purge"
+
+if [ $# -lt 1 ]; then
+    echo "Usage: safe-apt <$allowed_cmds> [packages...]" >&2
+    exit 1
+fi
+
+cmd="$1"
+shift
+
+if ! echo "$cmd" | grep -qE "^($allowed_cmds)$"; then
+    echo "safe-apt: '$cmd' is not allowed (use: $allowed_cmds)" >&2
+    exit 1
+fi
+
+# Block dangerous flags.
+for arg in "$@"; do
+    case "$arg" in
+        -o|--option|-o=*|--option=*)
+            echo "safe-apt: -o/--option flags are not allowed" >&2
+            exit 1
+            ;;
+    esac
+done
+
+export DEBIAN_FRONTEND=noninteractive
+exec /usr/bin/apt-get "$cmd" "$@"
+`
+}
+
 // SudoersRestricted returns the sudoers content for restricted egress mode.
 func SudoersRestricted() string {
-	return `pixel ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt, \
-    /usr/bin/dpkg, /usr/bin/dpkg-query, \
+	return `pixel ALL=(ALL) NOPASSWD: /usr/local/bin/safe-apt, \
+    /usr/bin/dpkg-query, \
     /usr/bin/systemctl start *, /usr/bin/systemctl stop *, \
     /usr/bin/systemctl restart *, /usr/bin/systemctl status *, \
     /usr/bin/systemctl enable *, /usr/bin/systemctl disable *, \

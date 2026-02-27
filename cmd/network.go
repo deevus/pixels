@@ -170,10 +170,12 @@ func runNetworkSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("running resolve script: exit %d, err %v", code, err)
 	}
 
-	// Restrict sudoers.
-	restrictSudo := fmt.Sprintf("cat > /etc/sudoers.d/pixel << 'PIXELS_EOF'\n%sPIXELS_EOF\nchmod 0440 /etc/sudoers.d/pixel", egress.SudoersRestricted())
-	if code, err := sshAsRoot(cmd, nc.ip, []string{"bash", "-c", restrictSudo}); err != nil || code != 0 {
-		return fmt.Errorf("writing restricted sudoers: exit %d, err %v", code, err)
+	// Write safe-apt wrapper and restrict sudoers.
+	if err := nc.client.WriteContainerFile(ctx, cname, "/usr/local/bin/safe-apt", []byte(egress.SafeAptScript()), 0o755); err != nil {
+		return fmt.Errorf("writing safe-apt wrapper: %w", err)
+	}
+	if err := nc.client.WriteContainerFile(ctx, cname, "/etc/sudoers.d/pixel", []byte(egress.SudoersRestricted()), 0o440); err != nil {
+		return fmt.Errorf("writing restricted sudoers: %w", err)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Egress set to %s for %s (%d domains)\n", mode, name, len(domains))
