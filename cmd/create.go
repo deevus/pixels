@@ -278,19 +278,26 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Waiting for dev tools to finish installing...\n")
 
 			// Stream journal output so the user can see progress.
-			journalCtx, journalCancel := context.WithCancel(ctx)
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				ssh.Exec(journalCtx, ip, "root", cfg.SSH.Key,
-					[]string{"journalctl", "-fu", "pixels-devtools", "--no-pager", "-o", "cat"})
-			}()
+			var journalCancel context.CancelFunc
+			var done chan struct{}
+			if verbose {
+				var journalCtx context.Context
+				journalCtx, journalCancel = context.WithCancel(ctx)
+				done = make(chan struct{})
+				go func() {
+					defer close(done)
+					ssh.Exec(journalCtx, ip, "root", cfg.SSH.Key,
+						[]string{"journalctl", "-fu", "pixels-devtools", "--no-pager", "-o", "cat"})
+				}()
+			}
 
 			if err := ssh.WaitProvisioned(ctx, ip, cfg.SSH.User, cfg.SSH.Key, 10*time.Minute); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", err)
 			}
-			journalCancel()
-			<-done
+			if journalCancel != nil {
+				journalCancel()
+				<-done
+			}
 		}
 		return ssh.Console(ip, cfg.SSH.User, cfg.SSH.Key)
 	}
