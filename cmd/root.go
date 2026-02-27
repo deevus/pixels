@@ -17,7 +17,10 @@ import (
 
 const containerPrefix = "px-"
 
-var cfg *config.Config
+var (
+	cfg     *config.Config
+	verbose bool
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "pixels",
@@ -44,9 +47,16 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().String("host", "", "TrueNAS host (overrides config)")
 	rootCmd.PersistentFlags().String("api-key", "", "TrueNAS API key (overrides config)")
 	rootCmd.PersistentFlags().StringP("username", "u", "", "TrueNAS username (overrides config)")
+}
+
+func logv(cmd *cobra.Command, format string, a ...any) {
+	if verbose {
+		fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", a...)
+	}
 }
 
 // Execute runs the root command.
