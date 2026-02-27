@@ -141,7 +141,8 @@ func SudoersRestricted() string {
     /usr/bin/systemctl restart *, /usr/bin/systemctl status *, \
     /usr/bin/systemctl enable *, /usr/bin/systemctl disable *, \
     /usr/bin/journalctl, /usr/bin/journalctl *, \
-    /usr/bin/test
+    /usr/bin/test, \
+    /usr/sbin/nft list *
 `
 }
 
