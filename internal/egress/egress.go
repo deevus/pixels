@@ -19,6 +19,7 @@ func AgentDomains() []string {
 		"sum.golang.org",
 		// Git
 		"github.com",
+		"api.github.com",
 		"gitlab.com",
 		"objects.githubusercontent.com",
 		"raw.githubusercontent.com",
@@ -27,6 +28,9 @@ func AgentDomains() []string {
 		"mise.run",
 		"mise.jdx.dev",
 		"nodejs.org",
+		// Ubuntu package repos (needed for apt-get after egress rules are loaded)
+		"archive.ubuntu.com",
+		"security.ubuntu.com",
 	}
 }
 
@@ -132,7 +136,8 @@ func SudoersRestricted() string {
     /usr/bin/systemctl start *, /usr/bin/systemctl stop *, \
     /usr/bin/systemctl restart *, /usr/bin/systemctl status *, \
     /usr/bin/systemctl enable *, /usr/bin/systemctl disable *, \
-    /usr/bin/journalctl, /usr/bin/journalctl *
+    /usr/bin/journalctl, /usr/bin/journalctl *, \
+    /usr/bin/test
 `
 }
 

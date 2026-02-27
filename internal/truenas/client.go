@@ -3,8 +3,10 @@ package truenas
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"strings"
+	"text/template"
 
 	truenas "github.com/deevus/truenas-go"
 	"github.com/deevus/truenas-go/client"
@@ -77,12 +79,19 @@ type ProvisionOpts struct {
 	DevTools    bool              // whether to install dev tools (mise, claude-code, codex, opencode)
 	Egress      string            // "unrestricted", "agent", or "allowlist"
 	EgressAllow []string          // custom domains (merged into agent, standalone for allowlist)
+	Log         io.Writer         // optional; verbose progress output
 }
 
 // Provision writes SSH keys, rc.local for openssh-server install, dev tools
 // setup, and optional DNS/env config into a running container's rootfs via
 // file_receive.
 func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts) error {
+	logf := func(format string, a ...any) {
+		if opts.Log != nil {
+			fmt.Fprintf(opts.Log, format+"\n", a...)
+		}
+	}
+
 	gcfg, err := c.Virt.GetGlobalConfig(ctx)
 	if err != nil {
 		return err
@@ -92,6 +101,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 	}
 	// Container rootfs on the TrueNAS host filesystem.
 	rootfs := fmt.Sprintf("/var/lib/incus/storage-pools/%s/containers/%s/rootfs", gcfg.Pool, name)
+	logf("Rootfs: %s", rootfs)
 
 	// Configure upstream DNS for systemd-resolved via drop-in.
 	if len(opts.DNS) > 0 {
@@ -106,6 +116,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		}); err != nil {
 			return fmt.Errorf("writing resolved drop-in: %w", err)
 		}
+		logf("Wrote DNS config (%d nameservers)", len(opts.DNS))
 	}
 
 	// Write environment variables to /etc/environment (sourced by PAM on login).
@@ -120,6 +131,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		}); err != nil {
 			return fmt.Errorf("writing /etc/environment: %w", err)
 		}
+		logf("Wrote /etc/environment (%d vars)", len(opts.Env))
 	}
 
 	if opts.SSHPubKey == "" && !opts.DevTools {
@@ -147,6 +159,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		}); err != nil {
 			return fmt.Errorf("writing authorized_keys: %w", err)
 		}
+		logf("Wrote SSH authorized_keys (root + pixel)")
 	}
 
 	// Write dev tools setup script and systemd unit.
@@ -163,6 +176,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		}); err != nil {
 			return fmt.Errorf("writing devtools systemd unit: %w", err)
 		}
+		logf("Wrote devtools setup script + systemd unit")
 	}
 
 	// Write egress control files when egress mode is restricted.
@@ -193,31 +207,32 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		}); err != nil {
 			return fmt.Errorf("writing restricted sudoers: %w", err)
 		}
+		logf("Wrote egress files (%d domains, restricted sudoers)", len(domains))
 	}
 
 	// Write rc.local — systemd-rc-local-generator automatically creates and
 	// starts rc-local.service if /etc/rc.local exists and is executable.
 	if opts.SSHPubKey != "" {
-		rcLocal := rcLocalSSH
-		if isRestricted && opts.DevTools {
-			rcLocal = rcLocalSSHDevtoolsEgress
-		} else if isRestricted {
-			rcLocal = rcLocalSSHEgress
-		} else if opts.DevTools {
-			rcLocal = rcLocalSSHDevtools
-		}
+		rcLocal := buildRCLocal(isRestricted, opts.DevTools)
 		if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/rc.local", truenas.WriteFileParams{
 			Content: []byte(rcLocal),
 			Mode:    0o755,
 		}); err != nil {
 			return fmt.Errorf("writing rc.local: %w", err)
 		}
+		logf("Wrote rc.local (egress=%v, devtools=%v)", isRestricted, opts.DevTools)
 	}
 
 	return nil
 }
 
-const rcLocalSSH = `#!/bin/sh
+// rcLocalParams controls the rc.local template output.
+type rcLocalParams struct {
+	Egress   bool
+	DevTools bool
+}
+
+var rcLocalTmpl = template.Must(template.New("rc.local").Parse(`#!/bin/sh
 set -e
 if [ ! -f /root/.ssh-provisioned ]; then
     apt-get update -qq
@@ -231,103 +246,41 @@ if [ ! -f /root/.ssh-provisioned ]; then
     fi
     cp -rn /etc/skel/. /home/pixel/
     mkdir -p /home/pixel/.ssh
+{{- if not .Egress}}
 
     echo 'pixel ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/pixel
     chmod 0440 /etc/sudoers.d/pixel
+{{- end}}
 
     chown -R pixel:pixel /home/pixel
     chmod 700 /home/pixel/.ssh
 
     systemctl enable --now ssh
+{{- if .Egress}}
+
+    # Install nftables separately with noninteractive + confold to keep our
+    # pre-written /etc/nftables.conf and avoid dpkg conffile prompts.
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Dpkg::Options::="--force-confold" nftables dnsutils
+    /usr/local/bin/pixels-resolve-egress.sh
+{{- end}}
     touch /root/.ssh-provisioned
 fi
-exit 0
-`
-
-const rcLocalSSHDevtools = `#!/bin/sh
-set -e
-if [ ! -f /root/.ssh-provisioned ]; then
-    apt-get update -qq
-    apt-get install -y -qq openssh-server sudo
-
-    if ! id pixel >/dev/null 2>&1; then
-        userdel -r ubuntu 2>/dev/null || true
-        groupdel ubuntu 2>/dev/null || true
-        groupadd -g 1000 pixel
-        useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel
-    fi
-    cp -rn /etc/skel/. /home/pixel/
-    mkdir -p /home/pixel/.ssh
-
-    echo 'pixel ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/pixel
-    chmod 0440 /etc/sudoers.d/pixel
-
-    chown -R pixel:pixel /home/pixel
-    chmod 700 /home/pixel/.ssh
-
-    systemctl enable --now ssh
-    touch /root/.ssh-provisioned
-fi
+{{- if .DevTools}}
 if [ -f /etc/systemd/system/pixels-devtools.service ] && [ ! -f /root/.devtools-provisioned ]; then
     systemctl daemon-reload
     systemctl start pixels-devtools.service
 fi
+{{- end}}
 exit 0
-`
+`))
 
-const rcLocalSSHEgress = `#!/bin/sh
-set -e
-if [ ! -f /root/.ssh-provisioned ]; then
-    apt-get update -qq
-    apt-get install -y -qq openssh-server sudo nftables dnsutils
-
-    if ! id pixel >/dev/null 2>&1; then
-        userdel -r ubuntu 2>/dev/null || true
-        groupdel ubuntu 2>/dev/null || true
-        groupadd -g 1000 pixel
-        useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel
-    fi
-    cp -rn /etc/skel/. /home/pixel/
-    mkdir -p /home/pixel/.ssh
-
-    chown -R pixel:pixel /home/pixel
-    chmod 700 /home/pixel/.ssh
-
-    systemctl enable --now ssh
-    /usr/local/bin/pixels-resolve-egress.sh
-    touch /root/.ssh-provisioned
-fi
-exit 0
-`
-
-const rcLocalSSHDevtoolsEgress = `#!/bin/sh
-set -e
-if [ ! -f /root/.ssh-provisioned ]; then
-    apt-get update -qq
-    apt-get install -y -qq openssh-server sudo nftables dnsutils
-
-    if ! id pixel >/dev/null 2>&1; then
-        userdel -r ubuntu 2>/dev/null || true
-        groupdel ubuntu 2>/dev/null || true
-        groupadd -g 1000 pixel
-        useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel
-    fi
-    cp -rn /etc/skel/. /home/pixel/
-    mkdir -p /home/pixel/.ssh
-
-    chown -R pixel:pixel /home/pixel
-    chmod 700 /home/pixel/.ssh
-
-    systemctl enable --now ssh
-    /usr/local/bin/pixels-resolve-egress.sh
-    touch /root/.ssh-provisioned
-fi
-if [ -f /etc/systemd/system/pixels-devtools.service ] && [ ! -f /root/.devtools-provisioned ]; then
-    systemctl daemon-reload
-    systemctl start pixels-devtools.service
-fi
-exit 0
-`
+func buildRCLocal(egress, devtools bool) string {
+	var b strings.Builder
+	if err := rcLocalTmpl.Execute(&b, rcLocalParams{Egress: egress, DevTools: devtools}); err != nil {
+		panic(fmt.Sprintf("executing rc.local template: %v", err))
+	}
+	return b.String()
+}
 
 const devtoolsSetupScript = `#!/bin/bash
 set -euo pipefail

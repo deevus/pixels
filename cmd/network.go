@@ -233,10 +233,9 @@ func ensureEgressFiles(cmd *cobra.Command, ip string) error {
 		return fmt.Errorf("writing resolve script: exit %d, err %v", code, err)
 	}
 
-	// Ensure nftables and dnsutils are installed.
-	if code, err := sshAsRoot(cmd, ip, []string{"bash", "-c", "apt-get install -y -qq nftables dnsutils"}); err != nil || code != 0 {
-		return fmt.Errorf("installing nftables: exit %d, err %v", code, err)
-	}
+	// Ensure nftables and dnsutils are installed. Use confold to keep our
+	// pre-written /etc/nftables.conf and avoid dpkg conffile prompts.
+	sshAsRoot(cmd, ip, []string{"bash", "-c", `DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Dpkg::Options::="--force-confold" nftables dnsutils`})
 
 	// Create empty domains file if it doesn't exist.
 	sshAsRoot(cmd, ip, []string{"bash", "-c", "touch /etc/pixels-egress-domains"})
