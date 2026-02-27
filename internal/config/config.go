@@ -171,7 +171,7 @@ func applyEnvBool(dst **bool, key string) {
 // Defaults to true (skip) when not explicitly set, since most TrueNAS boxes use self-signed certs.
 func (t *TrueNAS) InsecureSkipVerifyValue() bool {
 	if t.InsecureSkipVerify == nil {
-		return true
+		return false
 	}
 	return *t.InsecureSkipVerify
 }

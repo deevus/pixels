@@ -43,6 +43,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.TrueNAS.Username != "root" {
 		t.Errorf("truenas.username = %q, want %q", cfg.TrueNAS.Username, "root")
 	}
+	if cfg.TrueNAS.InsecureSkipVerifyValue() {
+		t.Error("InsecureSkipVerifyValue() = true, want false (default)")
+	}
 
 	// Provision defaults: enabled when not set.
 	if !cfg.Provision.IsEnabled() {
