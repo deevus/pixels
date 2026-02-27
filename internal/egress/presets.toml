@@ -27,9 +27,6 @@ domains = [
   # Sigstore (GitHub release attestation verification)
   "tuf-repo-cdn.sigstore.dev",
 
-  # SDK / tool downloads
-  "dl.google.com",
-
   # Tools
   "mise.run",
   "mise.jdx.dev",
@@ -38,4 +35,17 @@ domains = [
   # Ubuntu package repos
   "archive.ubuntu.com",
   "security.ubuntu.com",
+]
+
+# CIDR ranges for CDN providers whose IPs rotate too fast for per-IP resolution.
+cidrs = [
+  # Google (dl.google.com, googleapis.com, etc.)
+  "142.250.0.0/15",
+  "172.217.0.0/16",
+  "216.58.0.0/16",
+  "34.117.0.0/16",
+
+  # GitHub / Azure CDN (releases, attestations)
+  "185.199.108.0/22",
+  "20.209.0.0/16",
 ]

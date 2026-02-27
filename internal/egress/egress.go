@@ -13,6 +13,7 @@ var presetsFile string
 
 type preset struct {
 	Domains []string `toml:"domains"`
+	CIDRs   []string `toml:"cidrs"`
 }
 
 var presets map[string]preset
@@ -28,6 +29,15 @@ func init() {
 func PresetDomains(name string) []string {
 	if p, ok := presets[name]; ok {
 		return p.Domains
+	}
+	return nil
+}
+
+// PresetCIDRs returns the CIDR ranges for a named preset.
+// Returns nil if the preset doesn't exist or has no CIDRs.
+func PresetCIDRs(name string) []string {
+	if p, ok := presets[name]; ok {
+		return p.CIDRs
 	}
 	return nil
 }
@@ -65,6 +75,14 @@ func DomainsFileContent(domains []string) string {
 	return strings.Join(domains, "\n") + "\n"
 }
 
+// CIDRsFileContent returns the content of /etc/pixels-egress-cidrs.
+func CIDRsFileContent(cidrs []string) string {
+	if len(cidrs) == 0 {
+		return ""
+	}
+	return strings.Join(cidrs, "\n") + "\n"
+}
+
 // NftablesConf returns the base nftables.conf content.
 func NftablesConf() string {
 	return `#!/usr/sbin/nft -f
@@ -93,13 +111,14 @@ table inet pixels_egress {
 `
 }
 
-// ResolveScript returns the shell script that reads /etc/pixels-egress-domains,
-// resolves each domain to IPs, and populates the nftables allowed_v4 set.
+// ResolveScript returns the shell script that reads /etc/pixels-egress-domains
+// and /etc/pixels-egress-cidrs, and populates the nftables allowed_v4 set.
 func ResolveScript() string {
 	return `#!/bin/bash
 set -euo pipefail
 
 DOMAIN_FILE="/etc/pixels-egress-domains"
+CIDR_FILE="/etc/pixels-egress-cidrs"
 NFT_CONF="/etc/nftables.conf"
 
 if [ ! -f "$DOMAIN_FILE" ]; then
@@ -109,6 +128,16 @@ fi
 
 # Load the base ruleset (creates table and empty set).
 nft -f "$NFT_CONF"
+
+# Add CIDR ranges first (CDN providers with rotating IPs).
+if [ -f "$CIDR_FILE" ]; then
+    while IFS= read -r cidr || [ -n "$cidr" ]; do
+        cidr=$(echo "$cidr" | xargs)
+        [ -z "$cidr" ] && continue
+        [[ "$cidr" == \#* ]] && continue
+        nft add element inet pixels_egress allowed_v4 "{ $cidr }" 2>/dev/null || true
+    done < "$CIDR_FILE"
+fi
 
 # Resolve each domain and add IPs to the allowed set.
 while IFS= read -r domain || [ -n "$domain" ]; do
@@ -122,7 +151,7 @@ while IFS= read -r domain || [ -n "$domain" ]; do
     done
 done < "$DOMAIN_FILE"
 
-echo "Egress rules loaded: $(nft list set inet pixels_egress allowed_v4 | grep -c 'elements' || echo 0) entries"
+echo "Egress rules loaded"
 `
 }
 

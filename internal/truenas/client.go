@@ -207,6 +207,15 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		}); err != nil {
 			return fmt.Errorf("writing egress domains: %w", err)
 		}
+		cidrs := egress.PresetCIDRs(opts.Egress)
+		if len(cidrs) > 0 {
+			if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/pixels-egress-cidrs", truenas.WriteFileParams{
+				Content: []byte(egress.CIDRsFileContent(cidrs)),
+				Mode:    0o644,
+			}); err != nil {
+				return fmt.Errorf("writing egress cidrs: %w", err)
+			}
+		}
 		if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/nftables.conf", truenas.WriteFileParams{
 			Content: []byte(egress.NftablesConf()),
 			Mode:    0o644,
@@ -225,7 +234,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		}); err != nil {
 			return fmt.Errorf("writing restricted sudoers: %w", err)
 		}
-		logf("Wrote egress files (%d domains, restricted sudoers)", len(domains))
+		logf("Wrote egress files (%d domains, %d cidrs, restricted sudoers)", len(domains), len(cidrs))
 	}
 
 	// Write rc.local — systemd-rc-local-generator automatically creates and

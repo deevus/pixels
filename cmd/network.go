@@ -151,11 +151,18 @@ func runNetworkSet(cmd *cobra.Command, args []string) error {
 	}
 
 	domains := egress.ResolveDomains(mode, cfg.Network.Allow)
-	domainContent := egress.DomainsFileContent(domains)
 
 	// Write domains file via TrueNAS API.
-	if err := nc.client.WriteContainerFile(ctx, cname, "/etc/pixels-egress-domains", []byte(domainContent), 0o644); err != nil {
+	if err := nc.client.WriteContainerFile(ctx, cname, "/etc/pixels-egress-domains", []byte(egress.DomainsFileContent(domains)), 0o644); err != nil {
 		return fmt.Errorf("writing domains file: %w", err)
+	}
+
+	// Write CIDRs file if the preset has any.
+	cidrs := egress.PresetCIDRs(mode)
+	if len(cidrs) > 0 {
+		if err := nc.client.WriteContainerFile(ctx, cname, "/etc/pixels-egress-cidrs", []byte(egress.CIDRsFileContent(cidrs)), 0o644); err != nil {
+			return fmt.Errorf("writing cidrs file: %w", err)
+		}
 	}
 
 	// Resolve domains and load nftables rules.

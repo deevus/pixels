@@ -364,7 +364,7 @@ func TestProvision(t *testing.T) {
 				Egress:    "agent",
 			},
 			pool:      "tank",
-			wantCalls: 7, // root key + pixel key + domains + nftables.conf + resolve script + sudoers + rc.local
+			wantCalls: 8, // root key + pixel key + domains + cidrs + nftables.conf + resolve script + sudoers + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				paths := make(map[string]writeCall)
 				for _, c := range calls {
