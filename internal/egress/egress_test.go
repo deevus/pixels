@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-func TestAgentDomains(t *testing.T) {
-	domains := AgentDomains()
+func TestPresetDomains(t *testing.T) {
+	domains := PresetDomains("agent")
 	if len(domains) == 0 {
-		t.Fatal("AgentDomains() returned empty")
+		t.Fatal("PresetDomains(\"agent\") returned empty")
 	}
 
 	// Spot-check critical domains.
@@ -25,8 +25,14 @@ func TestAgentDomains(t *testing.T) {
 	}
 	for _, r := range required {
 		if !domainSet[r] {
-			t.Errorf("AgentDomains() missing %q", r)
+			t.Errorf("PresetDomains(\"agent\") missing %q", r)
 		}
+	}
+}
+
+func TestPresetDomainsUnknown(t *testing.T) {
+	if got := PresetDomains("nonexistent"); got != nil {
+		t.Errorf("PresetDomains(\"nonexistent\") = %v, want nil", got)
 	}
 }
 

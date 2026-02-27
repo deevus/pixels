@@ -1,0 +1,41 @@
+[agent]
+domains = [
+  # AI APIs
+  "api.anthropic.com",
+  "api.openai.com",
+  "generativelanguage.googleapis.com",
+
+  # Package registries
+  "registry.npmjs.org",
+  "pypi.org",
+  "files.pythonhosted.org",
+  "crates.io",
+  "static.crates.io",
+  "proxy.golang.org",
+  "sum.golang.org",
+
+  # Git + GitHub release CDN
+  "github.com",
+  "api.github.com",
+  "gitlab.com",
+  "objects.githubusercontent.com",
+  "raw.githubusercontent.com",
+  "codeload.github.com",
+  "github-releases.githubusercontent.com",
+  "tmaproduction.blob.core.windows.net",
+
+  # Sigstore (GitHub release attestation verification)
+  "tuf-repo-cdn.sigstore.dev",
+
+  # SDK / tool downloads
+  "dl.google.com",
+
+  # Tools
+  "mise.run",
+  "mise.jdx.dev",
+  "nodejs.org",
+
+  # Ubuntu package repos
+  "archive.ubuntu.com",
+  "security.ubuntu.com",
+]

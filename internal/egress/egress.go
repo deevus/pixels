@@ -1,43 +1,35 @@
 package egress
 
-import "strings"
+import (
+	_ "embed"
+	"fmt"
+	"strings"
 
-// AgentDomains returns the built-in domain allowlist for the "agent" preset.
-func AgentDomains() []string {
-	return []string{
-		// AI APIs
-		"api.anthropic.com",
-		"api.openai.com",
-		"generativelanguage.googleapis.com",
-		// Package registries
-		"registry.npmjs.org",
-		"pypi.org",
-		"files.pythonhosted.org",
-		"crates.io",
-		"static.crates.io",
-		"proxy.golang.org",
-		"sum.golang.org",
-		// Git + GitHub release CDN
-		"github.com",
-		"api.github.com",
-		"gitlab.com",
-		"objects.githubusercontent.com",
-		"raw.githubusercontent.com",
-		"codeload.github.com",
-		"github-releases.githubusercontent.com",
-		"tmaproduction.blob.core.windows.net",
-		// Sigstore (GitHub release attestation verification)
-		"tuf-repo-cdn.sigstore.dev",
-		// SDK / tool downloads
-		"dl.google.com",
-		// Tools
-		"mise.run",
-		"mise.jdx.dev",
-		"nodejs.org",
-		// Ubuntu package repos (needed for apt-get after egress rules are loaded)
-		"archive.ubuntu.com",
-		"security.ubuntu.com",
+	"github.com/BurntSushi/toml"
+)
+
+//go:embed presets.toml
+var presetsFile string
+
+type preset struct {
+	Domains []string `toml:"domains"`
+}
+
+var presets map[string]preset
+
+func init() {
+	if _, err := toml.Decode(presetsFile, &presets); err != nil {
+		panic(fmt.Sprintf("parsing egress presets.toml: %v", err))
 	}
+}
+
+// PresetDomains returns the domain allowlist for a named preset.
+// Returns nil if the preset doesn't exist.
+func PresetDomains(name string) []string {
+	if p, ok := presets[name]; ok {
+		return p.Domains
+	}
+	return nil
 }
 
 // ResolveDomains returns the final domain list for the given egress mode.
@@ -46,10 +38,13 @@ func ResolveDomains(egress string, allow []string) []string {
 	switch egress {
 	case "unrestricted":
 		return nil
-	case "agent":
+	case "allowlist":
+		return allow
+	default:
+		// Treat as preset name (e.g. "agent").
 		seen := make(map[string]bool)
 		var merged []string
-		for _, d := range AgentDomains() {
+		for _, d := range PresetDomains(egress) {
 			if !seen[d] {
 				seen[d] = true
 				merged = append(merged, d)
@@ -62,10 +57,6 @@ func ResolveDomains(egress string, allow []string) []string {
 			}
 		}
 		return merged
-	case "allowlist":
-		return allow
-	default:
-		return nil
 	}
 }
 
