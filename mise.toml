@@ -1,5 +1,6 @@
 [tools]
 go = "latest"
+git-cliff = "latest"
 
 [tasks.build]
 run = "go build ."
