@@ -16,6 +16,7 @@ type Config struct {
 	SSH        SSH               `toml:"ssh"`
 	Checkpoint Checkpoint        `toml:"checkpoint"`
 	Provision  Provision         `toml:"provision"`
+	Network    Network           `toml:"network"`
 	Env        map[string]string `toml:"env"`
 }
 
@@ -66,6 +67,15 @@ func (p *Provision) DevToolsEnabled() bool {
 	return *p.DevTools
 }
 
+type Network struct {
+	Egress string   `toml:"egress"`
+	Allow  []string `toml:"allow"`
+}
+
+func (n *Network) IsRestricted() bool {
+	return n.Egress == "agent" || n.Egress == "allowlist"
+}
+
 func Load() (*Config, error) {
 	cfg := &Config{
 		TrueNAS: TrueNAS{
@@ -80,6 +90,9 @@ func Load() (*Config, error) {
 		SSH: SSH{
 			User: "pixel",
 			Key:  "~/.ssh/id_ed25519",
+		},
+		Network: Network{
+			Egress: "unrestricted",
 		},
 	}
 
@@ -104,6 +117,7 @@ func Load() (*Config, error) {
 	applyEnv(&cfg.Checkpoint.DatasetPrefix, "PIXELS_CHECKPOINT_DATASET_PREFIX")
 	applyEnvBool(&cfg.Provision.Enabled, "PIXELS_PROVISION_ENABLED")
 	applyEnvBool(&cfg.Provision.DevTools, "PIXELS_PROVISION_DEVTOOLS")
+	applyEnv(&cfg.Network.Egress, "PIXELS_NETWORK_EGRESS")
 
 	cfg.SSH.Key = expandHome(cfg.SSH.Key)
 
