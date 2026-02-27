@@ -56,7 +56,7 @@ func runExec(cmd *cobra.Command, args []string) error {
 		cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
 	}
 
-	if err := ssh.WaitReady(ctx, ip, 30*time.Second); err != nil {
+	if err := ssh.WaitReady(ctx, ip, 30*time.Second, nil); err != nil {
 		return fmt.Errorf("waiting for SSH: %w", err)
 	}
 

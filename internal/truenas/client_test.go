@@ -357,6 +357,99 @@ func TestProvision(t *testing.T) {
 			writeErr: errors.New("disk full"),
 			wantErr:  true,
 		},
+		{
+			name: "egress agent provisioning",
+			opts: ProvisionOpts{
+				SSHPubKey: "ssh-ed25519 AAAA test@host",
+				Egress:    "agent",
+			},
+			pool:      "tank",
+			wantCalls: 9, // root key + pixel key + domains + cidrs + nftables.conf + resolve script + safe-apt + sudoers + rc.local
+			check: func(t *testing.T, calls []writeCall) {
+				paths := make(map[string]writeCall)
+				for _, c := range calls {
+					paths[c.path] = c
+				}
+				rootfs := "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs"
+
+				// Egress domains file.
+				domains := paths[rootfs+"/etc/pixels-egress-domains"]
+				if !strings.Contains(domains.content, "api.anthropic.com") {
+					t.Error("domains file missing api.anthropic.com")
+				}
+
+				// nftables.conf.
+				nft := paths[rootfs+"/etc/nftables.conf"]
+				if !strings.Contains(nft.content, "pixels_egress") {
+					t.Error("nftables.conf missing pixels_egress table")
+				}
+
+				// Resolve script.
+				script := paths[rootfs+"/usr/local/bin/pixels-resolve-egress.sh"]
+				if script.mode != 0o755 {
+					t.Errorf("resolve script mode = %o, want 755", script.mode)
+				}
+
+				// Sudoers should be restricted.
+				sudoers := paths[rootfs+"/etc/sudoers.d/pixel"]
+				if strings.Contains(sudoers.content, "NOPASSWD: ALL") {
+					t.Error("sudoers should be restricted, not blanket ALL")
+				}
+				if !strings.Contains(sudoers.content, "/usr/local/bin/safe-apt") {
+					t.Error("sudoers missing safe-apt allowlist")
+				}
+
+				// rc.local should include nftables setup.
+				rc := paths[rootfs+"/etc/rc.local"]
+				if !strings.Contains(rc.content, "nftables") {
+					t.Error("rc.local missing nftables install")
+				}
+				if !strings.Contains(rc.content, "pixels-resolve-egress") {
+					t.Error("rc.local missing resolve script call")
+				}
+			},
+		},
+		{
+			name: "egress unrestricted skips egress files",
+			opts: ProvisionOpts{
+				SSHPubKey: "ssh-ed25519 AAAA test@host",
+				Egress:    "unrestricted",
+			},
+			pool:      "tank",
+			wantCalls: 3, // root key + pixel key + rc.local (no egress files)
+			check: func(t *testing.T, calls []writeCall) {
+				for _, c := range calls {
+					if strings.Contains(c.path, "pixels-egress") || strings.Contains(c.path, "nftables") {
+						t.Errorf("unexpected egress file in unrestricted mode: %s", c.path)
+					}
+				}
+			},
+		},
+		{
+			name: "egress allowlist with custom domains",
+			opts: ProvisionOpts{
+				SSHPubKey:   "ssh-ed25519 AAAA test@host",
+				Egress:      "allowlist",
+				EgressAllow: []string{"custom.example.com"},
+			},
+			pool:      "tank",
+			wantCalls: 8, // root key + pixel key + domains + nftables.conf + resolve script + safe-apt + sudoers + rc.local
+			check: func(t *testing.T, calls []writeCall) {
+				rootfs := "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs"
+				for _, c := range calls {
+					if c.path == rootfs+"/etc/pixels-egress-domains" {
+						if !strings.Contains(c.content, "custom.example.com") {
+							t.Error("domains file missing custom domain")
+						}
+						if strings.Contains(c.content, "api.anthropic.com") {
+							t.Error("allowlist mode should not include agent preset domains")
+						}
+						return
+					}
+				}
+				t.Error("domains file not written")
+			},
+		},
 	}
 
 	for _, tt := range tests {

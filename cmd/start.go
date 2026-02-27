@@ -42,7 +42,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	ip := resolveIP(instance)
 	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
 	if ip != "" {
-		if err := ssh.WaitReady(ctx, ip, 30*time.Second); err != nil {
+		if err := ssh.WaitReady(ctx, ip, 30*time.Second, nil); err != nil {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: SSH not ready: %v\n", err)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "Started %s\n", name)

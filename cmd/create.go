@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -26,6 +28,7 @@ func init() {
 	cmd.Flags().Bool("no-provision", false, "skip all provisioning")
 	cmd.Flags().Bool("console", false, "wait for provisioning and open console")
 	cmd.Flags().String("from", "", "create from checkpoint (container:label)")
+	cmd.Flags().String("egress", "", "egress policy: unrestricted, agent, allowlist (default from config)")
 	rootCmd.AddCommand(cmd)
 }
 
@@ -48,6 +51,19 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		memory = cfg.Defaults.Memory
 	}
 
+	egressMode, _ := cmd.Flags().GetString("egress")
+	if egressMode == "" {
+		egressMode = cfg.Network.Egress
+	}
+	switch egressMode {
+	case "unrestricted", "agent", "allowlist", "":
+		// valid
+	default:
+		return fmt.Errorf("invalid --egress %q: must be unrestricted, agent, or allowlist", egressMode)
+	}
+
+	logv(cmd, "Config: image=%s cpu=%s memory=%dMiB egress=%s", image, cpu, memory, egressMode)
+
 	// Parse --from flag: "container" or "container:label"
 	var fromSource, fromLabel string
 	var tempSnapshot bool
@@ -63,6 +79,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	logv(cmd, "Connecting to %s...", cfg.TrueNAS.Host)
 	client, err := connectClient(ctx)
 	if err != nil {
 		return err
@@ -132,10 +149,12 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	logv(cmd, "Creating container %s (image=%s)...", containerName(name), image)
 	instance, err := client.CreateInstance(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("creating instance: %w", err)
 	}
+	logv(cmd, "Container created (status=%s)", instance.Status)
 
 	// Clone-from-checkpoint: stop the new container, destroy its ZFS dataset,
 	// and clone the checkpoint snapshot in its place via a temporary cron job
@@ -147,10 +166,12 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Cloning from %s checkpoint %q...\n", fromSource, fromLabel)
 		}
 
+		logv(cmd, "Stopping %s for rootfs replacement...", containerName(name))
 		if err := client.Virt.StopInstance(ctx, containerName(name), truenas.StopVirtInstanceOpts{Timeout: 30}); err != nil {
 			return fmt.Errorf("stopping %s for clone: %w", name, err)
 		}
 
+		logv(cmd, "Cloning ZFS snapshot %s...", snapshotID)
 		if err := client.ReplaceContainerRootfs(ctx, containerName(name), snapshotID); err != nil {
 			_ = client.Virt.DeleteInstance(ctx, containerName(name))
 			return fmt.Errorf("cloning checkpoint: %w", err)
@@ -173,26 +194,35 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if provisionEnabled {
 		pubKey, _ := readSSHPubKey()
 		provOpts := tnc.ProvisionOpts{
-			SSHPubKey: pubKey,
-			DNS:       cfg.Defaults.DNS,
-			Env:       cfg.Env,
-			DevTools:  cfg.Provision.DevToolsEnabled(),
+			SSHPubKey:   pubKey,
+			DNS:         cfg.Defaults.DNS,
+			Env:         cfg.Env,
+			DevTools:    cfg.Provision.DevToolsEnabled(),
+			Egress:      egressMode,
+			EgressAllow: cfg.Network.Allow,
+		}
+		if verbose {
+			provOpts.Log = cmd.ErrOrStderr()
 		}
 		needsProvision := pubKey != "" || len(cfg.Defaults.DNS) > 0 ||
 			len(cfg.Env) > 0 || provOpts.DevTools
 
 		if needsProvision {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Provisioning...\n")
+			logv(cmd, "SSH key: %v, DNS: %d, Env: %d, DevTools: %v, Egress: %s",
+				pubKey != "", len(cfg.Defaults.DNS), len(cfg.Env), provOpts.DevTools, egressMode)
 
 			if err := client.Provision(ctx, containerName(name), provOpts); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: provisioning failed: %v\n", err)
 			} else if pubKey != "" {
 				// Restart so systemd picks up rc.local on boot.
+				logv(cmd, "Restarting container for rc.local execution...")
 				_ = client.Virt.StopInstance(ctx, containerName(name), truenas.StopVirtInstanceOpts{Timeout: 30})
 				if err := client.Virt.StartInstance(ctx, containerName(name)); err != nil {
 					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: restart after provision: %v\n", err)
 				}
 				// Poll for IP — DHCP assignment takes a few seconds after restart.
+				logv(cmd, "Waiting for IP assignment...")
 				for range 15 {
 					instance, err = client.Virt.GetInstance(ctx, containerName(name))
 					if err != nil {
@@ -215,7 +245,11 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			timeout = 30 * time.Second
 		}
 		if provisionEnabled || skipProvision {
-			if err := ssh.WaitReady(ctx, ip, timeout); err != nil {
+			var sshLog io.Writer
+			if verbose {
+				sshLog = cmd.ErrOrStderr()
+			}
+			if err := ssh.WaitReady(ctx, ip, timeout, sshLog); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: SSH not ready: %v\n", err)
 			}
 		}
@@ -223,6 +257,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 	// Cache IP and status for fast exec/console lookups.
 	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
+	logv(cmd, "Cached IP=%s status=%s for %s", ip, instance.Status, name)
 
 	elapsed := time.Since(start).Truncate(100 * time.Millisecond)
 	fmt.Fprintf(cmd.OutOrStdout(), "Created %s in %s\n", containerName(name), elapsed)
@@ -241,8 +276,27 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if openConsole && ip != "" {
 		if devToolsActive {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Waiting for dev tools to finish installing...\n")
+
+			// Stream journal output so the user can see progress.
+			var journalCancel context.CancelFunc
+			var done chan struct{}
+			if verbose {
+				var journalCtx context.Context
+				journalCtx, journalCancel = context.WithCancel(ctx)
+				done = make(chan struct{})
+				go func() {
+					defer close(done)
+					ssh.Exec(journalCtx, ip, "root", cfg.SSH.Key,
+						[]string{"journalctl", "-fu", "pixels-devtools", "--no-pager", "-o", "cat"})
+				}()
+			}
+
 			if err := ssh.WaitProvisioned(ctx, ip, cfg.SSH.User, cfg.SSH.Key, 10*time.Minute); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", err)
+			}
+			if journalCancel != nil {
+				journalCancel()
+				<-done
 			}
 		}
 		return ssh.Console(ip, cfg.SSH.User, cfg.SSH.Key)

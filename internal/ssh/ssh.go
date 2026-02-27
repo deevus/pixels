@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -12,11 +13,14 @@ import (
 )
 
 // WaitReady polls the host's SSH port until it accepts connections or the timeout expires.
-func WaitReady(ctx context.Context, host string, timeout time.Duration) error {
+// If log is non-nil, progress is written every 5 seconds.
+func WaitReady(ctx context.Context, host string, timeout time.Duration, log io.Writer) error {
 	deadline := time.After(timeout)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
+	start := time.Now()
+	lastLog := start
 	for {
 		select {
 		case <-ctx.Done():
@@ -27,7 +31,14 @@ func WaitReady(ctx context.Context, host string, timeout time.Duration) error {
 			conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, "22"), 2*time.Second)
 			if err == nil {
 				conn.Close()
+				if log != nil {
+					fmt.Fprintf(log, "SSH ready on %s (%s)\n", host, time.Since(start).Truncate(100*time.Millisecond))
+				}
 				return nil
+			}
+			if log != nil && time.Since(lastLog) >= 5*time.Second {
+				fmt.Fprintf(log, "SSH: waiting for %s (%s elapsed)...\n", host, time.Since(start).Truncate(time.Second))
+				lastLog = time.Now()
 			}
 		}
 	}
@@ -59,6 +70,14 @@ func Exec(ctx context.Context, host, user, keyPath string, command []string) (in
 		return 1, err
 	}
 	return 0, nil
+}
+
+// Output runs a command on the remote host via SSH and returns its stdout.
+func Output(ctx context.Context, host, user, keyPath string, command []string) ([]byte, error) {
+	args := append(sshArgs(host, user, keyPath), command...)
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+	cmd.Stderr = os.Stderr
+	return cmd.Output()
 }
 
 // WaitProvisioned polls the remote host until /root/.devtools-provisioned exists.

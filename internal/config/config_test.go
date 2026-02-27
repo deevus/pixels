@@ -257,6 +257,96 @@ LITERAL = "no-expansion-here"
 	}
 }
 
+func TestNetworkDefaults(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, key := range []string{
+		"PIXELS_TRUENAS_HOST", "PIXELS_TRUENAS_USERNAME", "PIXELS_TRUENAS_API_KEY",
+		"PIXELS_NETWORK_EGRESS",
+	} {
+		t.Setenv(key, "")
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Network.Egress != "unrestricted" {
+		t.Errorf("Network.Egress = %q, want %q", cfg.Network.Egress, "unrestricted")
+	}
+	if cfg.Network.Allow != nil {
+		t.Errorf("Network.Allow = %v, want nil", cfg.Network.Allow)
+	}
+}
+
+func TestNetworkFromFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfgDir := filepath.Join(dir, "pixels")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := `
+[network]
+egress = "agent"
+allow = ["internal.mycompany.com", "registry.example.com"]
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PIXELS_NETWORK_EGRESS", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Network.Egress != "agent" {
+		t.Errorf("Network.Egress = %q, want %q", cfg.Network.Egress, "agent")
+	}
+	if len(cfg.Network.Allow) != 2 {
+		t.Fatalf("Network.Allow len = %d, want 2", len(cfg.Network.Allow))
+	}
+	if cfg.Network.Allow[0] != "internal.mycompany.com" {
+		t.Errorf("Network.Allow[0] = %q, want %q", cfg.Network.Allow[0], "internal.mycompany.com")
+	}
+}
+
+func TestNetworkEnvOverride(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PIXELS_NETWORK_EGRESS", "allowlist")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Network.Egress != "allowlist" {
+		t.Errorf("Network.Egress = %q, want %q", cfg.Network.Egress, "allowlist")
+	}
+}
+
+func TestNetworkIsRestricted(t *testing.T) {
+	tests := []struct {
+		egress string
+		want   bool
+	}{
+		{"unrestricted", false},
+		{"agent", true},
+		{"allowlist", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.egress, func(t *testing.T) {
+			n := Network{Egress: tt.egress}
+			if got := n.IsRestricted(); got != tt.want {
+				t.Errorf("IsRestricted() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExpandHome(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
