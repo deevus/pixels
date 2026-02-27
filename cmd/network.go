@@ -9,6 +9,7 @@ import (
 	"github.com/deevus/pixels/internal/cache"
 	"github.com/deevus/pixels/internal/egress"
 	"github.com/deevus/pixels/internal/ssh"
+	tnc "github.com/deevus/pixels/internal/truenas"
 )
 
 func init() {
@@ -48,31 +49,46 @@ func init() {
 	rootCmd.AddCommand(networkCmd)
 }
 
-// resolveContainerIP returns the IP for a container, checking cache first.
-func resolveContainerIP(cmd *cobra.Command, name string) (string, error) {
+// networkContext holds the resolved state needed by network subcommands.
+type networkContext struct {
+	name   string
+	ip     string
+	client *tnc.Client
+}
+
+// resolveNetworkContext connects to TrueNAS and resolves the container's IP.
+func resolveNetworkContext(cmd *cobra.Command, name string) (*networkContext, error) {
+	ctx := cmd.Context()
+
+	// Try cache for IP.
+	var ip string
 	if entry := cache.Get(name); entry != nil && entry.Status == "RUNNING" && entry.IP != "" {
-		return entry.IP, nil
+		ip = entry.IP
 	}
 
-	ctx := cmd.Context()
 	client, err := connectClient(ctx)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	defer client.Close()
 
-	instance, err := client.Virt.GetInstance(ctx, containerName(name))
-	if err != nil {
-		return "", fmt.Errorf("looking up %s: %w", name, err)
-	}
-	if instance.Status != "RUNNING" {
-		return "", fmt.Errorf("%s is not running (status: %s)", name, instance.Status)
-	}
-	ip := resolveIP(instance)
 	if ip == "" {
-		return "", fmt.Errorf("%s has no IP address", name)
+		instance, err := client.Virt.GetInstance(ctx, containerName(name))
+		if err != nil {
+			client.Close()
+			return nil, fmt.Errorf("looking up %s: %w", name, err)
+		}
+		if instance.Status != "RUNNING" {
+			client.Close()
+			return nil, fmt.Errorf("%s is not running (status: %s)", name, instance.Status)
+		}
+		ip = resolveIP(instance)
+		if ip == "" {
+			client.Close()
+			return nil, fmt.Errorf("%s has no IP address", name)
+		}
 	}
-	return ip, nil
+
+	return &networkContext{name: name, ip: ip, client: client}, nil
 }
 
 // sshAsRoot runs a command on the container as root via SSH.
@@ -81,10 +97,11 @@ func sshAsRoot(cmd *cobra.Command, ip string, command []string) (int, error) {
 }
 
 func runNetworkShow(cmd *cobra.Command, args []string) error {
-	ip, err := resolveContainerIP(cmd, args[0])
+	nc, err := resolveNetworkContext(cmd, args[0])
 	if err != nil {
 		return err
 	}
+	defer nc.client.Close()
 
 	fmt.Fprintf(cmd.ErrOrStderr(), "Fetching egress rules for %s...\n", args[0])
 
@@ -98,7 +115,7 @@ func runNetworkShow(cmd *cobra.Command, args []string) error {
 else
     echo "Mode: unrestricted (no egress policy configured)"
 fi`
-	_, err = sshAsRoot(cmd, ip, []string{"bash", "-c", showCmd})
+	_, err = sshAsRoot(cmd, nc.ip, []string{"bash", "-c", showCmd})
 	return err
 }
 
@@ -109,43 +126,45 @@ func runNetworkSet(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid mode %q: must be unrestricted, agent, or allowlist", mode)
 	}
 
-	ip, err := resolveContainerIP(cmd, name)
+	nc, err := resolveNetworkContext(cmd, name)
 	if err != nil {
 		return err
 	}
+	defer nc.client.Close()
+	ctx := cmd.Context()
+	cname := containerName(name)
 
 	if mode == "unrestricted" {
 		// Remove egress rules and restore blanket sudo.
-		sshAsRoot(cmd, ip, []string{"nft", "flush", "ruleset"})
-		sshAsRoot(cmd, ip, []string{"rm", "-f", "/etc/pixels-egress-domains", "/etc/nftables.conf", "/usr/local/bin/pixels-resolve-egress.sh"})
+		sshAsRoot(cmd, nc.ip, []string{"nft", "flush", "ruleset"})
+		sshAsRoot(cmd, nc.ip, []string{"rm", "-f", "/etc/pixels-egress-domains", "/etc/nftables.conf", "/usr/local/bin/pixels-resolve-egress.sh"})
 		restoreSudo := fmt.Sprintf("cat > /etc/sudoers.d/pixel << 'PIXELS_EOF'\n%sPIXELS_EOF\nchmod 0440 /etc/sudoers.d/pixel", egress.SudoersUnrestricted())
-		sshAsRoot(cmd, ip, []string{"bash", "-c", restoreSudo})
+		sshAsRoot(cmd, nc.ip, []string{"bash", "-c", restoreSudo})
 		fmt.Fprintf(cmd.OutOrStdout(), "Egress set to unrestricted for %s\n", name)
 		return nil
 	}
 
 	// Ensure egress infrastructure exists (nftables, resolve script, etc.).
-	if err := ensureEgressFiles(cmd, ip); err != nil {
+	if err := ensureEgressFiles(cmd, nc.ip, nc.client, cname); err != nil {
 		return err
 	}
 
 	domains := egress.ResolveDomains(mode, cfg.Network.Allow)
 	domainContent := egress.DomainsFileContent(domains)
 
-	// Write domains file.
-	writeCmd := fmt.Sprintf("cat > /etc/pixels-egress-domains << 'PIXELS_EOF'\n%sPIXELS_EOF", domainContent)
-	if code, err := sshAsRoot(cmd, ip, []string{"bash", "-c", writeCmd}); err != nil || code != 0 {
-		return fmt.Errorf("writing domains file: exit %d, err %v", code, err)
+	// Write domains file via TrueNAS API.
+	if err := nc.client.WriteContainerFile(ctx, cname, "/etc/pixels-egress-domains", []byte(domainContent), 0o644); err != nil {
+		return fmt.Errorf("writing domains file: %w", err)
 	}
 
 	// Resolve domains and load nftables rules.
-	if code, err := sshAsRoot(cmd, ip, []string{"/usr/local/bin/pixels-resolve-egress.sh"}); err != nil || code != 0 {
+	if code, err := sshAsRoot(cmd, nc.ip, []string{"/usr/local/bin/pixels-resolve-egress.sh"}); err != nil || code != 0 {
 		return fmt.Errorf("running resolve script: exit %d, err %v", code, err)
 	}
 
 	// Restrict sudoers.
 	restrictSudo := fmt.Sprintf("cat > /etc/sudoers.d/pixel << 'PIXELS_EOF'\n%sPIXELS_EOF\nchmod 0440 /etc/sudoers.d/pixel", egress.SudoersRestricted())
-	if code, err := sshAsRoot(cmd, ip, []string{"bash", "-c", restrictSudo}); err != nil || code != 0 {
+	if code, err := sshAsRoot(cmd, nc.ip, []string{"bash", "-c", restrictSudo}); err != nil || code != 0 {
 		return fmt.Errorf("writing restricted sudoers: exit %d, err %v", code, err)
 	}
 
@@ -156,24 +175,46 @@ func runNetworkSet(cmd *cobra.Command, args []string) error {
 func runNetworkAllow(cmd *cobra.Command, args []string) error {
 	name, domain := args[0], args[1]
 
-	ip, err := resolveContainerIP(cmd, name)
+	nc, err := resolveNetworkContext(cmd, name)
 	if err != nil {
 		return err
 	}
+	defer nc.client.Close()
+	ctx := cmd.Context()
+	cname := containerName(name)
 
 	// Ensure egress infrastructure exists (idempotent).
-	if err := ensureEgressFiles(cmd, ip); err != nil {
+	if err := ensureEgressFiles(cmd, nc.ip, nc.client, cname); err != nil {
 		return err
 	}
 
-	// Append domain to file.
-	appendCmd := fmt.Sprintf("echo %q >> /etc/pixels-egress-domains", domain)
-	if code, err := sshAsRoot(cmd, ip, []string{"bash", "-c", appendCmd}); err != nil || code != 0 {
-		return fmt.Errorf("appending domain: exit %d, err %v", code, err)
+	// Read current domains via SSH.
+	out, err := ssh.Output(ctx, nc.ip, "root", cfg.SSH.Key, []string{"cat", "/etc/pixels-egress-domains"})
+	if err != nil {
+		return fmt.Errorf("reading domains file: %w", err)
+	}
+
+	// Append domain if not already present.
+	current := strings.TrimSpace(string(out))
+	lines := strings.Split(current, "\n")
+	for _, l := range lines {
+		if strings.TrimSpace(l) == domain {
+			fmt.Fprintf(cmd.OutOrStdout(), "%s already allowed for %s\n", domain, name)
+			return nil
+		}
+	}
+	if current != "" {
+		current += "\n"
+	}
+	current += domain + "\n"
+
+	// Write back via TrueNAS API.
+	if err := nc.client.WriteContainerFile(ctx, cname, "/etc/pixels-egress-domains", []byte(current), 0o644); err != nil {
+		return fmt.Errorf("writing domains file: %w", err)
 	}
 
 	// Re-resolve.
-	if code, err := sshAsRoot(cmd, ip, []string{"/usr/local/bin/pixels-resolve-egress.sh"}); err != nil || code != 0 {
+	if code, err := sshAsRoot(cmd, nc.ip, []string{"/usr/local/bin/pixels-resolve-egress.sh"}); err != nil || code != 0 {
 		return fmt.Errorf("reloading rules: exit %d, err %v", code, err)
 	}
 
@@ -184,26 +225,44 @@ func runNetworkAllow(cmd *cobra.Command, args []string) error {
 func runNetworkDeny(cmd *cobra.Command, args []string) error {
 	name, domain := args[0], args[1]
 
-	ip, err := resolveContainerIP(cmd, name)
+	nc, err := resolveNetworkContext(cmd, name)
 	if err != nil {
 		return err
 	}
+	defer nc.client.Close()
+	ctx := cmd.Context()
+	cname := containerName(name)
 
-	// Check that egress is configured before trying to remove a domain.
-	checkCode, _ := sshAsRoot(cmd, ip, []string{"test", "-f", "/etc/pixels-egress-domains"})
-	if checkCode != 0 {
+	// Read current domains via SSH.
+	out, err := ssh.Output(ctx, nc.ip, "root", cfg.SSH.Key, []string{"cat", "/etc/pixels-egress-domains"})
+	if err != nil {
 		return fmt.Errorf("no egress policy configured on %s", name)
 	}
 
-	// Remove domain from file (escape for sed).
-	escaped := strings.ReplaceAll(domain, ".", "\\.")
-	sedCmd := fmt.Sprintf("sed -i '/^%s$/d' /etc/pixels-egress-domains", escaped)
-	if code, err := sshAsRoot(cmd, ip, []string{"bash", "-c", sedCmd}); err != nil || code != 0 {
-		return fmt.Errorf("removing domain: exit %d, err %v", code, err)
+	// Remove domain.
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var kept []string
+	found := false
+	for _, l := range lines {
+		if strings.TrimSpace(l) == domain {
+			found = true
+			continue
+		}
+		kept = append(kept, l)
+	}
+	if !found {
+		return fmt.Errorf("domain %s not found in egress allowlist for %s", domain, name)
+	}
+
+	content := strings.Join(kept, "\n") + "\n"
+
+	// Write back via TrueNAS API.
+	if err := nc.client.WriteContainerFile(ctx, cname, "/etc/pixels-egress-domains", []byte(content), 0o644); err != nil {
+		return fmt.Errorf("writing domains file: %w", err)
 	}
 
 	// Re-resolve (full reload replaces all rules).
-	if code, err := sshAsRoot(cmd, ip, []string{"/usr/local/bin/pixels-resolve-egress.sh"}); err != nil || code != 0 {
+	if code, err := sshAsRoot(cmd, nc.ip, []string{"/usr/local/bin/pixels-resolve-egress.sh"}); err != nil || code != 0 {
 		return fmt.Errorf("reloading rules: exit %d, err %v", code, err)
 	}
 
@@ -214,23 +273,23 @@ func runNetworkDeny(cmd *cobra.Command, args []string) error {
 // ensureEgressFiles writes the nftables config and resolve script if not already
 // present. This allows `network allow` to work on containers that were created
 // without egress configured.
-func ensureEgressFiles(cmd *cobra.Command, ip string) error {
+func ensureEgressFiles(cmd *cobra.Command, ip string, client *tnc.Client, cname string) error {
 	// Check if resolve script already exists.
 	checkCode, _ := sshAsRoot(cmd, ip, []string{"test", "-f", "/usr/local/bin/pixels-resolve-egress.sh"})
 	if checkCode == 0 {
 		return nil // already provisioned
 	}
 
-	// Write nftables.conf.
-	nftCmd := fmt.Sprintf("cat > /etc/nftables.conf << 'PIXELS_EOF'\n%sPIXELS_EOF", egress.NftablesConf())
-	if code, err := sshAsRoot(cmd, ip, []string{"bash", "-c", nftCmd}); err != nil || code != 0 {
-		return fmt.Errorf("writing nftables.conf: exit %d, err %v", code, err)
+	ctx := cmd.Context()
+
+	// Write nftables.conf via TrueNAS API.
+	if err := client.WriteContainerFile(ctx, cname, "/etc/nftables.conf", []byte(egress.NftablesConf()), 0o644); err != nil {
+		return fmt.Errorf("writing nftables.conf: %w", err)
 	}
 
-	// Write resolve script.
-	scriptCmd := fmt.Sprintf("cat > /usr/local/bin/pixels-resolve-egress.sh << 'PIXELS_EOF'\n%sPIXELS_EOF\nchmod 755 /usr/local/bin/pixels-resolve-egress.sh", egress.ResolveScript())
-	if code, err := sshAsRoot(cmd, ip, []string{"bash", "-c", scriptCmd}); err != nil || code != 0 {
-		return fmt.Errorf("writing resolve script: exit %d, err %v", code, err)
+	// Write resolve script via TrueNAS API.
+	if err := client.WriteContainerFile(ctx, cname, "/usr/local/bin/pixels-resolve-egress.sh", []byte(egress.ResolveScript()), 0o755); err != nil {
+		return fmt.Errorf("writing resolve script: %w", err)
 	}
 
 	// Ensure nftables and dnsutils are installed. Use confold to keep our

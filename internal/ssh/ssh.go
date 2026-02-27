@@ -72,6 +72,14 @@ func Exec(ctx context.Context, host, user, keyPath string, command []string) (in
 	return 0, nil
 }
 
+// Output runs a command on the remote host via SSH and returns its stdout.
+func Output(ctx context.Context, host, user, keyPath string, command []string) ([]byte, error) {
+	args := append(sshArgs(host, user, keyPath), command...)
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+	cmd.Stderr = os.Stderr
+	return cmd.Output()
+}
+
 // WaitProvisioned polls the remote host until /root/.devtools-provisioned exists.
 func WaitProvisioned(ctx context.Context, host, user, keyPath string, timeout time.Duration) error {
 	return pollUntil(ctx, 2*time.Second, timeout, func(ctx context.Context) bool {

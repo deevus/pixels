@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"strings"
 	"text/template"
@@ -69,6 +70,23 @@ func (c *Client) ContainerDataset(ctx context.Context, name string) (string, err
 		return "", fmt.Errorf("no dataset in virt global config")
 	}
 	return gcfg.Dataset + "/containers/" + name, nil
+}
+
+// WriteContainerFile writes a file into a running container's rootfs via the
+// TrueNAS filesystem API (no SSH required).
+func (c *Client) WriteContainerFile(ctx context.Context, name, path string, content []byte, mode fs.FileMode) error {
+	gcfg, err := c.Virt.GetGlobalConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("querying virt global config: %w", err)
+	}
+	if gcfg.Pool == "" {
+		return fmt.Errorf("no pool in virt global config")
+	}
+	rootfs := fmt.Sprintf("/var/lib/incus/storage-pools/%s/containers/%s/rootfs", gcfg.Pool, name)
+	return c.Filesystem.WriteFile(ctx, rootfs+path, truenas.WriteFileParams{
+		Content: content,
+		Mode:    mode,
+	})
 }
 
 // ProvisionOpts contains options for provisioning a container.
