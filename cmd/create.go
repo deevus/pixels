@@ -26,6 +26,7 @@ func init() {
 	cmd.Flags().Bool("no-provision", false, "skip all provisioning")
 	cmd.Flags().Bool("console", false, "wait for provisioning and open console")
 	cmd.Flags().String("from", "", "create from checkpoint (container:label)")
+	cmd.Flags().String("egress", "", "egress policy: unrestricted, agent, allowlist (default from config)")
 	rootCmd.AddCommand(cmd)
 }
 
@@ -46,6 +47,17 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 	if memory == 0 {
 		memory = cfg.Defaults.Memory
+	}
+
+	egressMode, _ := cmd.Flags().GetString("egress")
+	if egressMode == "" {
+		egressMode = cfg.Network.Egress
+	}
+	switch egressMode {
+	case "unrestricted", "agent", "allowlist", "":
+		// valid
+	default:
+		return fmt.Errorf("invalid --egress %q: must be unrestricted, agent, or allowlist", egressMode)
 	}
 
 	// Parse --from flag: "container" or "container:label"
@@ -173,10 +185,12 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if provisionEnabled {
 		pubKey, _ := readSSHPubKey()
 		provOpts := tnc.ProvisionOpts{
-			SSHPubKey: pubKey,
-			DNS:       cfg.Defaults.DNS,
-			Env:       cfg.Env,
-			DevTools:  cfg.Provision.DevToolsEnabled(),
+			SSHPubKey:   pubKey,
+			DNS:         cfg.Defaults.DNS,
+			Env:         cfg.Env,
+			DevTools:    cfg.Provision.DevToolsEnabled(),
+			Egress:      egressMode,
+			EgressAllow: cfg.Network.Allow,
 		}
 		needsProvision := pubKey != "" || len(cfg.Defaults.DNS) > 0 ||
 			len(cfg.Env) > 0 || provOpts.DevTools
