@@ -26,6 +26,8 @@ func AgentDomains() []string {
 		"codeload.github.com",
 		"github-releases.githubusercontent.com",
 		"tmaproduction.blob.core.windows.net",
+		// Sigstore (GitHub release attestation verification)
+		"tuf-repo-cdn.sigstore.dev",
 		// Tools
 		"mise.run",
 		"mise.jdx.dev",
