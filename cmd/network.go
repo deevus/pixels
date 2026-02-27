@@ -290,9 +290,6 @@ func writeEgressInfra(cmd *cobra.Command, ip string, client *tnc.Client, cname s
 	// pre-written /etc/nftables.conf and avoid dpkg conffile prompts.
 	sshAsRoot(cmd, ip, []string{"bash", "-c", `DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o Dpkg::Options::="--force-confold" nftables dnsutils`})
 
-	// Create empty domains file if it doesn't exist.
-	sshAsRoot(cmd, ip, []string{"bash", "-c", "touch /etc/pixels-egress-domains"})
-
 	return nil
 }
 
@@ -304,5 +301,10 @@ func ensureEgressFiles(cmd *cobra.Command, ip string, client *tnc.Client, cname 
 	if checkCode == 0 {
 		return nil // already provisioned
 	}
-	return writeEgressInfra(cmd, ip, client, cname)
+	if err := writeEgressInfra(cmd, ip, client, cname); err != nil {
+		return err
+	}
+	// Create empty domains file so allow can append to it.
+	sshAsRoot(cmd, ip, []string{"touch", "/etc/pixels-egress-domains"})
+	return nil
 }
