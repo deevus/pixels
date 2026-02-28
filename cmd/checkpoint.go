@@ -6,6 +6,7 @@ import (
 	"time"
 
 	truenas "github.com/deevus/truenas-go"
+	"github.com/dustin/go-humanize"
 	"github.com/spf13/cobra"
 
 	"github.com/deevus/pixels/internal/cache"
@@ -120,7 +121,7 @@ func runCheckpointList(cmd *cobra.Command, args []string) error {
 	w := newTabWriter(cmd)
 	fmt.Fprintln(w, "LABEL\tSIZE")
 	for _, s := range snapshots {
-		fmt.Fprintf(w, "%s\t%s\n", s.SnapshotName, formatBytes(s.Referenced))
+		fmt.Fprintf(w, "%s\t%s\n", s.SnapshotName, humanize.IBytes(uint64(s.Referenced)))
 	}
 	return w.Flush()
 }
