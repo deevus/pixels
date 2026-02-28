@@ -3,6 +3,7 @@ package ssh
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -54,6 +55,17 @@ func TestPollUntil_ContextCancelled(t *testing.T) {
 	}
 	if err != context.Canceled {
 		t.Errorf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestConsole_SSHNotFound(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // empty dir, no ssh binary
+	err := Console("10.0.0.1", "pixel", "")
+	if err == nil {
+		t.Fatal("expected error when ssh is not on PATH")
+	}
+	if got := err.Error(); !strings.Contains(got, "ssh binary not found") {
+		t.Errorf("error = %q, want it to contain %q", got, "ssh binary not found")
 	}
 }
 
