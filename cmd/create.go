@@ -181,9 +181,17 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("starting %s: %w", name, err)
 		}
 
-		instance, err = client.Virt.GetInstance(ctx, containerName(name))
-		if err != nil {
-			return fmt.Errorf("refreshing instance: %w", err)
+		// Poll for IP — DHCP assignment takes a few seconds after start.
+		logv(cmd, "Waiting for IP assignment...")
+		for range 15 {
+			instance, err = client.Virt.GetInstance(ctx, containerName(name))
+			if err != nil {
+				return fmt.Errorf("refreshing instance: %w", err)
+			}
+			if resolveIP(instance) != "" {
+				break
+			}
+			time.Sleep(time.Second)
 		}
 	}
 
