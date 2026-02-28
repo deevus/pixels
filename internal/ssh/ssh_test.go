@@ -1,62 +1,10 @@
 package ssh
 
 import (
-	"context"
 	"os"
 	"strings"
 	"testing"
-	"time"
 )
-
-func TestPollUntil_ImmediateSuccess(t *testing.T) {
-	err := pollUntil(context.Background(), 10*time.Millisecond, time.Second, func(ctx context.Context) bool {
-		return true
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestPollUntil_SucceedsAfterRetries(t *testing.T) {
-	calls := 0
-	err := pollUntil(context.Background(), 10*time.Millisecond, time.Second, func(ctx context.Context) bool {
-		calls++
-		return calls >= 3
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if calls < 3 {
-		t.Errorf("expected at least 3 calls, got %d", calls)
-	}
-}
-
-func TestPollUntil_Timeout(t *testing.T) {
-	err := pollUntil(context.Background(), 10*time.Millisecond, 50*time.Millisecond, func(ctx context.Context) bool {
-		return false
-	})
-	if err == nil {
-		t.Fatal("expected timeout error, got nil")
-	}
-	if got := err.Error(); got != "timed out after 50ms" {
-		t.Errorf("error = %q, want timeout message", got)
-	}
-}
-
-func TestPollUntil_ContextCancelled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err := pollUntil(ctx, 10*time.Millisecond, time.Second, func(ctx context.Context) bool {
-		return false
-	})
-	if err == nil {
-		t.Fatal("expected context error, got nil")
-	}
-	if err != context.Canceled {
-		t.Errorf("error = %v, want context.Canceled", err)
-	}
-}
 
 func TestConsole_SSHNotFound(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // empty dir, no ssh binary

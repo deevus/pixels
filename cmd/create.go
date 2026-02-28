@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/deevus/pixels/internal/cache"
+	"github.com/deevus/pixels/internal/retry"
 	"github.com/deevus/pixels/internal/ssh"
 	tnc "github.com/deevus/pixels/internal/truenas"
 )
@@ -183,15 +185,15 @@ func runCreate(cmd *cobra.Command, args []string) error {
 
 		// Poll for IP — DHCP assignment takes a few seconds after start.
 		logv(cmd, "Waiting for IP assignment...")
-		for range 15 {
-			instance, err = client.Virt.GetInstance(ctx, containerName(name))
+		if err := retry.Poll(ctx, time.Second, 15*time.Second, func(ctx context.Context) (bool, error) {
+			inst, err := client.Virt.GetInstance(ctx, containerName(name))
 			if err != nil {
-				return fmt.Errorf("refreshing instance: %w", err)
+				return false, fmt.Errorf("refreshing instance: %w", err)
 			}
-			if resolveIP(instance) != "" {
-				break
-			}
-			time.Sleep(time.Second)
+			instance = inst
+			return resolveIP(instance) != "", nil
+		}); err != nil && !errors.Is(err, retry.ErrTimeout) {
+			return err
 		}
 	}
 
@@ -231,15 +233,15 @@ func runCreate(cmd *cobra.Command, args []string) error {
 				}
 				// Poll for IP — DHCP assignment takes a few seconds after restart.
 				logv(cmd, "Waiting for IP assignment...")
-				for range 15 {
-					instance, err = client.Virt.GetInstance(ctx, containerName(name))
+				if err := retry.Poll(ctx, time.Second, 15*time.Second, func(ctx context.Context) (bool, error) {
+					inst, err := client.Virt.GetInstance(ctx, containerName(name))
 					if err != nil {
-						return fmt.Errorf("refreshing instance: %w", err)
+						return false, fmt.Errorf("refreshing instance: %w", err)
 					}
-					if resolveIP(instance) != "" {
-						break
-					}
-					time.Sleep(time.Second)
+					instance = inst
+					return resolveIP(instance) != "", nil
+				}); err != nil && !errors.Is(err, retry.ErrTimeout) {
+					return err
 				}
 			}
 		}
