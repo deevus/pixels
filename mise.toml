@@ -9,3 +9,6 @@ run = "go build ."
 depends = ["build"]
 alias = "br"
 run = "./pixels"
+
+[tasks.check-release]
+run = "mise exec goreleaser -- goreleaser check"

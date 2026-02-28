@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 )
@@ -65,6 +66,21 @@ func TestSSHArgs(t *testing.T) {
 			if got[i] != w {
 				t.Errorf("args[%d] = %q, want %q", len(args)-3+i, got[i], w)
 			}
+		}
+	})
+
+	t.Run("uses os.DevNull for UserKnownHostsFile", func(t *testing.T) {
+		args := sshArgs("10.0.0.1", "pixel", "")
+		want := "UserKnownHostsFile=" + os.DevNull
+		found := false
+		for _, a := range args {
+			if a == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("sshArgs should contain %q, got %v", want, args)
 		}
 	})
 

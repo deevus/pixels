@@ -8,7 +8,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"syscall"
 	"time"
 )
 
@@ -42,16 +41,6 @@ func WaitReady(ctx context.Context, host string, timeout time.Duration, log io.W
 			}
 		}
 	}
-}
-
-// Console replaces the current process with an interactive SSH session.
-func Console(host, user, keyPath string) error {
-	sshBin, err := exec.LookPath("ssh")
-	if err != nil {
-		return fmt.Errorf("ssh binary not found: %w", err)
-	}
-	args := append([]string{"ssh"}, sshArgs(host, user, keyPath)...)
-	return syscall.Exec(sshBin, args, os.Environ())
 }
 
 // Exec runs a command on the remote host via SSH and returns its exit code.
@@ -120,7 +109,7 @@ func TestAuth(ctx context.Context, host, user, keyPath string) error {
 func sshArgs(host, user, keyPath string) []string {
 	args := []string{
 		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "UserKnownHostsFile=" + os.DevNull,
 		"-o", "PasswordAuthentication=no",
 		"-o", "LogLevel=ERROR",
 	}
