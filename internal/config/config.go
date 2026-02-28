@@ -132,8 +132,8 @@ func configPath() string {
 	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
 		return filepath.Join(dir, "pixels", "config.toml")
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "pixels", "config.toml")
+	dir, _ := os.UserConfigDir()
+	return filepath.Join(dir, "pixels", "config.toml")
 }
 
 func applyEnv(dst *string, key string) {

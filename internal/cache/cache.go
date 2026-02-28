@@ -17,8 +17,8 @@ func dir() string {
 	if d := os.Getenv("XDG_CACHE_HOME"); d != "" {
 		return filepath.Join(d, "pixels")
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".cache", "pixels")
+	d, _ := os.UserCacheDir()
+	return filepath.Join(d, "pixels")
 }
 
 func path(name string) string {

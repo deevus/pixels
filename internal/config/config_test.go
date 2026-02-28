@@ -350,6 +350,28 @@ func TestNetworkIsRestricted(t *testing.T) {
 	}
 }
 
+func TestConfigPathXDG(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	got := configPath()
+	want := filepath.Join(dir, "pixels", "config.toml")
+	if got != want {
+		t.Errorf("configPath() = %q, want %q", got, want)
+	}
+}
+
+func TestConfigPathDefault(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
+
+	got := configPath()
+	configDir, _ := os.UserConfigDir()
+	want := filepath.Join(configDir, "pixels", "config.toml")
+	if got != want {
+		t.Errorf("configPath() = %q, want %q", got, want)
+	}
+}
+
 func TestExpandHome(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
