@@ -191,6 +191,34 @@ api_key = "file-key"
 	}
 }
 
+func TestEmptyEnvDoesNotOverrideDefault(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PIXELS_DEFAULT_IMAGE", "")
+	t.Setenv("PIXELS_DEFAULT_POOL", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Defaults.Image != "ubuntu/24.04" {
+		t.Errorf("image = %q, want %q (empty env should not override default)", cfg.Defaults.Image, "ubuntu/24.04")
+	}
+	if cfg.Defaults.Pool != "tank" {
+		t.Errorf("pool = %q, want %q (empty env should not override default)", cfg.Defaults.Pool, "tank")
+	}
+}
+
+func TestInvalidEnvReturnsError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PIXELS_TRUENAS_PORT", "not-a-number")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for invalid PIXELS_TRUENAS_PORT, got nil")
+	}
+}
+
 func TestProvisionEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
