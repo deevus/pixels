@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/caarlos0/env/v11"
 )
 
 type Config struct {
@@ -21,36 +21,36 @@ type Config struct {
 }
 
 type TrueNAS struct {
-	Host               string `toml:"host"`
-	Port               int    `toml:"port"`
-	Username           string `toml:"username"`
-	APIKey             string `toml:"api_key"`
-	InsecureSkipVerify *bool  `toml:"insecure_skip_verify"`
+	Host               string `toml:"host"                env:"PIXELS_TRUENAS_HOST"`
+	Port               int    `toml:"port"                env:"PIXELS_TRUENAS_PORT"`
+	Username           string `toml:"username"            env:"PIXELS_TRUENAS_USERNAME"`
+	APIKey             string `toml:"api_key"             env:"PIXELS_TRUENAS_API_KEY"`
+	InsecureSkipVerify *bool  `toml:"insecure_skip_verify" env:"PIXELS_TRUENAS_INSECURE"`
 }
 
 type Defaults struct {
-	Image   string `toml:"image"`
-	CPU     string `toml:"cpu"`
-	Memory  int64  `toml:"memory"` // MiB
-	Pool    string `toml:"pool"`
-	NICType string `toml:"nic_type"` // "macvlan" or "bridged"
-	Parent  string `toml:"parent"`   // parent interface (e.g. "eno1", "br0")
+	Image   string   `toml:"image"    env:"PIXELS_DEFAULT_IMAGE"`
+	CPU     string   `toml:"cpu"      env:"PIXELS_DEFAULT_CPU"`
+	Memory  int64    `toml:"memory"   env:"PIXELS_DEFAULT_MEMORY"` // MiB
+	Pool    string   `toml:"pool"     env:"PIXELS_DEFAULT_POOL"`
+	NICType string   `toml:"nic_type"` // "macvlan" or "bridged"
+	Parent  string   `toml:"parent"`   // parent interface (e.g. "eno1", "br0")
 	Network string   `toml:"network"`  // Incus network name (e.g. "incusbr0")
 	DNS     []string `toml:"dns"`      // nameservers to write into containers
 }
 
 type SSH struct {
-	User string `toml:"user"`
-	Key  string `toml:"key"`
+	User string `toml:"user" env:"PIXELS_SSH_USER"`
+	Key  string `toml:"key"  env:"PIXELS_SSH_KEY"`
 }
 
 type Checkpoint struct {
-	DatasetPrefix string `toml:"dataset_prefix"`
+	DatasetPrefix string `toml:"dataset_prefix" env:"PIXELS_CHECKPOINT_DATASET_PREFIX"`
 }
 
 type Provision struct {
-	Enabled  *bool `toml:"enabled"`
-	DevTools *bool `toml:"devtools"`
+	Enabled  *bool `toml:"enabled"  env:"PIXELS_PROVISION_ENABLED"`
+	DevTools *bool `toml:"devtools" env:"PIXELS_PROVISION_DEVTOOLS"`
 }
 
 func (p *Provision) IsEnabled() bool {
@@ -68,7 +68,7 @@ func (p *Provision) DevToolsEnabled() bool {
 }
 
 type Network struct {
-	Egress string   `toml:"egress"`
+	Egress string   `toml:"egress" env:"PIXELS_NETWORK_EGRESS"`
 	Allow  []string `toml:"allow"`
 }
 
@@ -103,21 +103,9 @@ func Load() (*Config, error) {
 		}
 	}
 
-	applyEnv(&cfg.TrueNAS.Host, "PIXELS_TRUENAS_HOST")
-	applyEnv(&cfg.TrueNAS.Username, "PIXELS_TRUENAS_USERNAME")
-	applyEnv(&cfg.TrueNAS.APIKey, "PIXELS_TRUENAS_API_KEY")
-	applyEnvInt(&cfg.TrueNAS.Port, "PIXELS_TRUENAS_PORT")
-	applyEnvBool(&cfg.TrueNAS.InsecureSkipVerify, "PIXELS_TRUENAS_INSECURE")
-	applyEnv(&cfg.Defaults.Image, "PIXELS_DEFAULT_IMAGE")
-	applyEnv(&cfg.Defaults.CPU, "PIXELS_DEFAULT_CPU")
-	applyEnvInt64(&cfg.Defaults.Memory, "PIXELS_DEFAULT_MEMORY")
-	applyEnv(&cfg.Defaults.Pool, "PIXELS_DEFAULT_POOL")
-	applyEnv(&cfg.SSH.User, "PIXELS_SSH_USER")
-	applyEnv(&cfg.SSH.Key, "PIXELS_SSH_KEY")
-	applyEnv(&cfg.Checkpoint.DatasetPrefix, "PIXELS_CHECKPOINT_DATASET_PREFIX")
-	applyEnvBool(&cfg.Provision.Enabled, "PIXELS_PROVISION_ENABLED")
-	applyEnvBool(&cfg.Provision.DevTools, "PIXELS_PROVISION_DEVTOOLS")
-	applyEnv(&cfg.Network.Egress, "PIXELS_NETWORK_EGRESS")
+	if err := env.Parse(cfg); err != nil {
+		return nil, fmt.Errorf("parsing environment: %w", err)
+	}
 
 	cfg.SSH.Key = expandHome(cfg.SSH.Key)
 
@@ -134,37 +122,6 @@ func configPath() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "pixels", "config.toml")
-}
-
-func applyEnv(dst *string, key string) {
-	if v := os.Getenv(key); v != "" {
-		*dst = v
-	}
-}
-
-func applyEnvInt(dst *int, key string) {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			*dst = n
-		}
-	}
-}
-
-func applyEnvInt64(dst *int64, key string) {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-			*dst = n
-		}
-	}
-}
-
-func applyEnvBool(dst **bool, key string) {
-	if v := os.Getenv(key); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err == nil {
-			*dst = &b
-		}
-	}
 }
 
 // InsecureSkipVerify returns whether TLS verification should be skipped.

@@ -2,9 +2,9 @@ al.essio.dev/pkg/shellescape v1.6.0 h1:NxFcEqzFSEVCGN2yq7Huv/9hyCEGVa/TncnOOBBeX
 al.essio.dev/pkg/shellescape v1.6.0/go.mod h1:6sIqp7X2P6mThCQ7twERpZTuigpr6KbZWtls1U8I890=
 github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
+github.com/caarlos0/env/v11 v11.4.0 h1:Kcb6t5kIIr4XkoQC9AF2j+8E1Jsrl3Wz/hhm1LtoGAc=
+github.com/caarlos0/env/v11 v11.4.0/go.mod h1:qupehSf/Y0TUTsxKywqRt/vJjN5nz6vauiYEUUr8P4U=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
-github.com/deevus/truenas-go v0.3.0 h1:IuJ7wm+aW0aSmm4AjW8GK6f+8bjKolj9BVd9bTfKeSU=
-github.com/deevus/truenas-go v0.3.0/go.mod h1:a5MwZEqT4NE8jwSA9BHONOAO8yH4kCaS5a+d4ad6sLA=
 github.com/deevus/truenas-go v0.4.0 h1:gESJ0naqtwzgdN1/gG5wBrp/Lm/5HF8xCBsRcwNgg78=
 github.com/deevus/truenas-go v0.4.0/go.mod h1:a5MwZEqT4NE8jwSA9BHONOAO8yH4kCaS5a+d4ad6sLA=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=

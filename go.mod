@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/caarlos0/env/v11 v11.4.0
 	github.com/deevus/truenas-go v0.4.0
 	github.com/spf13/cobra v1.10.2
 )
