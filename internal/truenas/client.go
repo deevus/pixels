@@ -28,6 +28,9 @@ var egressSetupScript string
 //go:embed scripts/enable-egress.sh
 var egressEnableScript string
 
+//go:embed scripts/pixels-profile.sh
+var pixelsProfileScript string
+
 // Client wraps a truenas-go WebSocket client and its typed services.
 type Client struct {
 	ws         client.Client
@@ -162,7 +165,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 
 	// Shell alias for detaching zmx sessions.
 	if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/profile.d/pixels.sh", truenas.WriteFileParams{
-		Content: []byte("alias detach='zmx detach'\n[ -n \"$ZMX_SESSION\" ] && echo \"Detach: Ctrl+\\\\ or type 'detach'\"\n"),
+		Content: []byte(pixelsProfileScript),
 		Mode:    0o644,
 	}); err != nil {
 		return fmt.Errorf("writing /etc/profile.d/pixels.sh: %w", err)
