@@ -236,7 +236,7 @@ func TestProvision(t *testing.T) {
 				DevTools:  true,
 			},
 			pool:      "tank",
-			wantCalls: 8, // dns + sshd config + env + root key + pixel key + setup script + systemd unit + rc.local
+			wantCalls: 7, // dns + sshd config + env + root key + pixel key + setup script + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				paths := make(map[string]writeCall)
 				for _, c := range calls {
@@ -261,16 +261,15 @@ func TestProvision(t *testing.T) {
 					}
 				}
 
-				// Systemd unit.
-				unit := paths[rootfs+"/etc/systemd/system/pixels-devtools.service"]
-				if !strings.Contains(unit.content, "pixels-setup-devtools.sh") {
-					t.Errorf("systemd unit missing ExecStart: %s", unit.content)
+				// No systemd unit should be written.
+				if _, ok := paths[rootfs+"/etc/systemd/system/pixels-devtools.service"]; ok {
+					t.Error("systemd unit should not be written (zmx handles devtools)")
 				}
 
-				// rc.local has devtools service start and pixel user.
+				// rc.local should have SSH bootstrap only, no devtools.
 				rc := paths[rootfs+"/etc/rc.local"]
-				if !strings.Contains(rc.content, "pixels-devtools.service") {
-					t.Errorf("rc.local missing devtools service start: %s", rc.content)
+				if strings.Contains(rc.content, "pixels-devtools") {
+					t.Error("rc.local should not reference devtools")
 				}
 				for _, want := range []string{"set -e", "useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel", "NOPASSWD:ALL"} {
 					if !strings.Contains(rc.content, want) {
@@ -364,7 +363,7 @@ func TestProvision(t *testing.T) {
 				Egress:    "agent",
 			},
 			pool:      "tank",
-			wantCalls: 10, // sshd config + root key + pixel key + domains + cidrs + nftables.conf + resolve script + safe-apt + sudoers + rc.local
+			wantCalls: 10, // sshd config + root key + pixel key + domains + cidrs + nftables.conf + resolve script + safe-apt + sudoers.restricted + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				paths := make(map[string]writeCall)
 				for _, c := range calls {
@@ -390,8 +389,8 @@ func TestProvision(t *testing.T) {
 					t.Errorf("resolve script mode = %o, want 755", script.mode)
 				}
 
-				// Sudoers should be restricted.
-				sudoers := paths[rootfs+"/etc/sudoers.d/pixel"]
+				// Restricted sudoers staged at .restricted path.
+				sudoers := paths[rootfs+"/etc/sudoers.d/pixel.restricted"]
 				if strings.Contains(sudoers.content, "NOPASSWD: ALL") {
 					t.Error("sudoers should be restricted, not blanket ALL")
 				}
@@ -399,13 +398,17 @@ func TestProvision(t *testing.T) {
 					t.Error("sudoers missing safe-apt allowlist")
 				}
 
-				// rc.local should include nftables setup.
+				// rc.local should be SSH-only bootstrap (no egress setup).
 				rc := paths[rootfs+"/etc/rc.local"]
-				if !strings.Contains(rc.content, "nftables") {
-					t.Error("rc.local missing nftables install")
+				if strings.Contains(rc.content, "nftables") {
+					t.Error("rc.local should not contain nftables (zmx handles egress)")
 				}
-				if !strings.Contains(rc.content, "pixels-resolve-egress") {
-					t.Error("rc.local missing resolve script call")
+				if strings.Contains(rc.content, "pixels-resolve-egress") {
+					t.Error("rc.local should not call resolve script (zmx handles egress)")
+				}
+				// rc.local always writes unrestricted sudoers; zmx egress step replaces it.
+				if !strings.Contains(rc.content, "NOPASSWD:ALL") {
+					t.Error("rc.local should have unrestricted sudoers")
 				}
 			},
 		},
@@ -580,7 +583,7 @@ func TestProvision(t *testing.T) {
 			// Verify rc.local provisions the pixel user.
 			for _, want := range []string{
 				"set -e",
-				"openssh-server sudo",
+				"openssh-server sudo curl",
 				"useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel",
 				"NOPASSWD:ALL",
 				"/home/pixel/.ssh",
