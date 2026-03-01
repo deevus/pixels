@@ -648,6 +648,23 @@ func TestProvision(t *testing.T) {
 	}
 }
 
+func TestIsZFSPathChar(t *testing.T) {
+	tests := []struct {
+		r    rune
+		want bool
+	}{
+		{'a', true}, {'Z', true}, {'5', true},
+		{'/', true}, {'-', true}, {'_', true}, {'.', true}, {'@', true},
+		{'!', false}, {' ', false}, {'$', false}, {'\n', false},
+		{';', false}, {'\\', false}, {'`', false},
+	}
+	for _, tt := range tests {
+		if got := isZFSPathChar(tt.r); got != tt.want {
+			t.Errorf("isZFSPathChar(%q) = %v, want %v", tt.r, got, tt.want)
+		}
+	}
+}
+
 func TestCreateInstance(t *testing.T) {
 	var captured truenas.CreateVirtInstanceOpts
 

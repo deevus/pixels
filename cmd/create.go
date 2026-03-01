@@ -313,13 +313,14 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	if openConsole && ip != "" {
-		runner := &provision.Runner{Host: ip, User: "root", KeyPath: cfg.SSH.Key}
+		runner := provision.NewRunner(ip, "root", cfg.SSH.Key)
 		runner.WaitProvisioned(ctx, func(status string) {
 			setStatus(status)
 			logv(cmd, "Provision: %s", status)
 		})
 		stopSpinner()
-		return ssh.Console(ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key, Env: cfg.EnvForward}, "")
+		cc := ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key, Env: cfg.EnvForward}
+		return ssh.Console(cc, zmxRemoteCmd(ctx, cc, "console"))
 	}
 
 	return nil

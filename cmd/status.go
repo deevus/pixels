@@ -59,7 +59,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("waiting for SSH: %w", err)
 	}
 
-	runner := &provision.Runner{Host: ip, User: "root", KeyPath: cfg.SSH.Key}
+	runner := provision.NewRunner(ip, "root", cfg.SSH.Key)
 	raw, err := runner.List(ctx)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "No such file") {

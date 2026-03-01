@@ -170,7 +170,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 
 	// MOTD with detach hint (shown on interactive SSH login, not exec).
 	if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/motd", truenas.WriteFileParams{
-		Content: []byte("Detach: Ctrl+\\ or type 'detach'\n"),
+		Content: []byte("Detach: Ctrl+\\ or type 'detach'\n\n"),
 		Mode:    0o644,
 	}); err != nil {
 		return fmt.Errorf("writing /etc/motd: %w", err)

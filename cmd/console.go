@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"time"
@@ -87,7 +88,7 @@ func runConsole(cmd *cobra.Command, args []string) error {
 	}
 
 	// Wait for provisioning to finish before opening the console.
-	runner := &provision.Runner{Host: ip, User: "root", KeyPath: cfg.SSH.Key}
+	runner := provision.NewRunner(ip, "root", cfg.SSH.Key)
 	var spin *spinner.Spinner
 	if !verbose {
 		spin = spinner.New(spinner.CharSets[14], 100*time.Millisecond, spinner.WithWriter(cmd.ErrOrStderr()))
@@ -111,16 +112,21 @@ func runConsole(cmd *cobra.Command, args []string) error {
 	// Determine remote command for zmx session persistence.
 	var remoteCmd string
 	if !noPersist {
-		// Check if zmx is available in the container (without env forwarding).
-		checkCC := ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key}
-		code, err := ssh.ExecQuiet(ctx, checkCC, []string{"command -v zmx >/dev/null 2>&1"})
-		if err == nil && code == 0 {
-			remoteCmd = "unset XDG_RUNTIME_DIR && zmx attach " + session
-		} else {
-			logv(cmd, "zmx not available, falling back to plain SSH")
-		}
+		remoteCmd = zmxRemoteCmd(ctx, cc, session)
 	}
 
 	// Console replaces the process — does not return on success.
 	return ssh.Console(cc, remoteCmd)
+}
+
+// zmxRemoteCmd checks if zmx is available in the container and returns the
+// attach command string. Returns empty string if zmx is not installed.
+func zmxRemoteCmd(ctx context.Context, cc ssh.ConnConfig, session string) string {
+	// Check without env forwarding to avoid polluting the zmx check.
+	checkCC := ssh.ConnConfig{Host: cc.Host, User: cc.User, KeyPath: cc.KeyPath}
+	code, err := ssh.ExecQuiet(ctx, checkCC, []string{"command -v zmx >/dev/null 2>&1"})
+	if err == nil && code == 0 {
+		return "unset XDG_RUNTIME_DIR && zmx attach " + session
+	}
+	return ""
 }
