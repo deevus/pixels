@@ -320,7 +320,11 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		})
 		stopSpinner()
 		cc := ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key, Env: cfg.EnvForward}
-		return ssh.Console(cc, zmxRemoteCmd(ctx, cc, "console"))
+		remoteCmd := zmxRemoteCmd(ctx, cc, "console")
+		if remoteCmd != "" {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Detach: Ctrl+\\ or type 'detach'\n")
+		}
+		return ssh.Console(cc, remoteCmd)
 	}
 
 	return nil

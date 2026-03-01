@@ -167,15 +167,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 	}); err != nil {
 		return fmt.Errorf("writing /etc/profile.d/pixels.sh: %w", err)
 	}
-
-	// MOTD with detach hint (shown on interactive SSH login, not exec).
-	if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/motd", truenas.WriteFileParams{
-		Content: []byte("Detach: Ctrl+\\ or type 'detach'\n\n"),
-		Mode:    0o644,
-	}); err != nil {
-		return fmt.Errorf("writing /etc/motd: %w", err)
-	}
-	logf("Wrote detach alias + MOTD")
+	logf("Wrote detach alias")
 
 	// Write environment variables to /etc/environment (sourced by PAM on login).
 	if len(opts.Env) > 0 {
