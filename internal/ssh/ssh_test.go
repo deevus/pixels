@@ -8,7 +8,7 @@ import (
 
 func TestConsole_SSHNotFound(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // empty dir, no ssh binary
-	err := Console("10.0.0.1", "pixel", "", nil)
+	err := Console(ConnConfig{Host: "10.0.0.1", User: "pixel"}, "")
 	if err == nil {
 		t.Fatal("expected error when ssh is not on PATH")
 	}
@@ -19,7 +19,7 @@ func TestConsole_SSHNotFound(t *testing.T) {
 
 func TestSSHArgs(t *testing.T) {
 	t.Run("with key", func(t *testing.T) {
-		args := sshArgs("10.0.0.1", "pixel", "/tmp/key", nil)
+		args := sshArgs(ConnConfig{Host: "10.0.0.1", User: "pixel", KeyPath: "/tmp/key"})
 		wantSuffix := []string{"-i", "/tmp/key", "pixel@10.0.0.1"}
 		got := args[len(args)-3:]
 		for i, w := range wantSuffix {
@@ -30,7 +30,7 @@ func TestSSHArgs(t *testing.T) {
 	})
 
 	t.Run("uses os.DevNull for UserKnownHostsFile", func(t *testing.T) {
-		args := sshArgs("10.0.0.1", "pixel", "", nil)
+		args := sshArgs(ConnConfig{Host: "10.0.0.1", User: "pixel"})
 		want := "UserKnownHostsFile=" + os.DevNull
 		found := false
 		for _, a := range args {
@@ -45,7 +45,7 @@ func TestSSHArgs(t *testing.T) {
 	})
 
 	t.Run("without key", func(t *testing.T) {
-		args := sshArgs("10.0.0.1", "pixel", "", nil)
+		args := sshArgs(ConnConfig{Host: "10.0.0.1", User: "pixel"})
 		last := args[len(args)-1]
 		if last != "pixel@10.0.0.1" {
 			t.Errorf("last arg = %q, want %q", last, "pixel@10.0.0.1")
@@ -58,11 +58,15 @@ func TestSSHArgs(t *testing.T) {
 	})
 
 	t.Run("SetEnv with env vars", func(t *testing.T) {
-		env := map[string]string{
-			"GITHUB_TOKEN": "ghp_abc123",
-			"API_KEY":      "sk-secret",
+		cc := ConnConfig{
+			Host: "10.0.0.1",
+			User: "pixel",
+			Env: map[string]string{
+				"GITHUB_TOKEN": "ghp_abc123",
+				"API_KEY":      "sk-secret",
+			},
 		}
-		args := sshArgs("10.0.0.1", "pixel", "", env)
+		args := sshArgs(cc)
 
 		// All vars should be in a single SetEnv directive (space-separated,
 		// sorted by key), preceded by -o. Multiple -o SetEnv flags don't
@@ -91,7 +95,7 @@ func TestSSHArgs(t *testing.T) {
 	})
 
 	t.Run("nil env produces no SetEnv", func(t *testing.T) {
-		args := sshArgs("10.0.0.1", "pixel", "", nil)
+		args := sshArgs(ConnConfig{Host: "10.0.0.1", User: "pixel"})
 		for _, a := range args {
 			if strings.HasPrefix(a, "SetEnv=") {
 				t.Errorf("unexpected SetEnv arg %q with nil env", a)
@@ -100,11 +104,101 @@ func TestSSHArgs(t *testing.T) {
 	})
 
 	t.Run("empty env produces no SetEnv", func(t *testing.T) {
-		args := sshArgs("10.0.0.1", "pixel", "", map[string]string{})
+		args := sshArgs(ConnConfig{Host: "10.0.0.1", User: "pixel", Env: map[string]string{}})
 		for _, a := range args {
 			if strings.HasPrefix(a, "SetEnv=") {
 				t.Errorf("unexpected SetEnv arg %q with empty env", a)
 			}
+		}
+	})
+}
+
+func TestConsoleArgs(t *testing.T) {
+	t.Run("no remote command", func(t *testing.T) {
+		cc := ConnConfig{Host: "10.0.0.1", User: "pixel", KeyPath: "/tmp/key"}
+		args := consoleArgs(cc, "")
+		sshA := sshArgs(cc)
+		if len(args) != len(sshA) {
+			t.Fatalf("len(consoleArgs) = %d, want %d (same as sshArgs)", len(args), len(sshA))
+		}
+		for i := range args {
+			if args[i] != sshA[i] {
+				t.Errorf("args[%d] = %q, want %q", i, args[i], sshA[i])
+			}
+		}
+		for _, a := range args {
+			if a == "-t" {
+				t.Error("should not include -t when remoteCmd is empty")
+			}
+		}
+	})
+
+	t.Run("no key with remote command", func(t *testing.T) {
+		cc := ConnConfig{Host: "10.0.0.1", User: "pixel"}
+		args := consoleArgs(cc, "zmx attach console")
+		last3 := args[len(args)-3:]
+		if last3[0] != "-t" {
+			t.Errorf("expected -t before user@host, got %q", last3[0])
+		}
+		if last3[1] != "pixel@10.0.0.1" {
+			t.Errorf("expected user@host, got %q", last3[1])
+		}
+		if last3[2] != "zmx attach console" {
+			t.Errorf("expected remote command, got %q", last3[2])
+		}
+		for _, a := range args {
+			if a == "-i" {
+				t.Error("should not include -i when keyPath is empty")
+			}
+		}
+	})
+
+	t.Run("with remote command", func(t *testing.T) {
+		cc := ConnConfig{Host: "10.0.0.1", User: "pixel", KeyPath: "/tmp/key"}
+		args := consoleArgs(cc, "zmx attach console")
+		// Should have -t before user@host and command after
+		last3 := args[len(args)-3:]
+		if last3[0] != "-t" {
+			t.Errorf("expected -t before user@host, got %q", last3[0])
+		}
+		if last3[1] != "pixel@10.0.0.1" {
+			t.Errorf("expected user@host, got %q", last3[1])
+		}
+		if last3[2] != "zmx attach console" {
+			t.Errorf("expected remote command, got %q", last3[2])
+		}
+	})
+
+	t.Run("with env and remote command", func(t *testing.T) {
+		cc := ConnConfig{
+			Host:    "10.0.0.1",
+			User:    "pixel",
+			KeyPath: "/tmp/key",
+			Env:     map[string]string{"FOO": "bar"},
+		}
+		args := consoleArgs(cc, "zmx attach build")
+
+		// Verify SetEnv is present.
+		var foundSetEnv bool
+		for _, a := range args {
+			if strings.HasPrefix(a, "SetEnv=") {
+				foundSetEnv = true
+			}
+		}
+		if !foundSetEnv {
+			t.Error("SetEnv not found in args")
+		}
+
+		// Verify -t and command at end.
+		last3 := args[len(args)-3:]
+		if last3[0] != "-t" {
+			t.Errorf("expected -t, got %q", last3[0])
+		}
+		if last3[1] != "pixel@10.0.0.1" {
+			t.Errorf("expected user@host, got %q", last3[1])
+		}
+		if last3[2] != "zmx attach build" {
+			t.Errorf("expected remote command, got %q", last3[2])
 		}
 	})
 }

@@ -103,10 +103,21 @@ All containers are prefixed `px-` internally. Commands accept bare names (e.g., 
 
 ## SSH Access
 
-**Console** opens an interactive SSH session. If the container is stopped, it starts it automatically:
+**Console** opens an interactive SSH session with zmx session persistence.
+Disconnecting and reconnecting re-attaches to the same session:
 
 ```bash
-pixels console mybox
+pixels console mybox                    # default "console" session
+pixels console mybox -s build           # named session
+pixels console mybox --no-persist       # plain SSH, no zmx
+```
+
+Inside a session, press `Ctrl+\` to detach (works in TUIs too), or type `detach`.
+
+**Sessions** lists zmx sessions in a container:
+
+```bash
+pixels sessions mybox
 ```
 
 **Exec** runs a command and returns its exit code:
