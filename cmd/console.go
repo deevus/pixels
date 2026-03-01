@@ -126,7 +126,7 @@ func zmxRemoteCmd(ctx context.Context, cc ssh.ConnConfig, session string) string
 	checkCC := ssh.ConnConfig{Host: cc.Host, User: cc.User, KeyPath: cc.KeyPath}
 	code, err := ssh.ExecQuiet(ctx, checkCC, []string{"command -v zmx >/dev/null 2>&1"})
 	if err == nil && code == 0 {
-		return "unset XDG_RUNTIME_DIR && zmx attach " + session
+		return "unset XDG_RUNTIME_DIR && zmx attach " + session + " bash -l"
 	}
 	return ""
 }
