@@ -255,7 +255,7 @@ func TestProvision(t *testing.T) {
 				if setup.mode != 0o755 {
 					t.Errorf("setup script mode = %o, want 755", setup.mode)
 				}
-				for _, want := range []string{"mise", "npm install", "claude-code", "opencode", "su - pixel"} {
+				for _, want := range []string{"mise", "claude-code", "opencode", "codex", "su - pixel"} {
 					if !strings.Contains(setup.content, want) {
 						t.Errorf("setup script missing %q", want)
 					}
