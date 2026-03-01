@@ -2,3 +2,4 @@ pixels
 methods.json
 .worktrees/
 .claude/
+*.swp
