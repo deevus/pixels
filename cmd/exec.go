@@ -65,7 +65,7 @@ func runExec(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	exitCode, err := ssh.Exec(ctx, ip, cfg.SSH.User, cfg.SSH.Key, command)
+	exitCode, err := ssh.Exec(ctx, ip, cfg.SSH.User, cfg.SSH.Key, command, cfg.EnvForward)
 	if err != nil {
 		return err
 	}

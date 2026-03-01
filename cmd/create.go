@@ -297,7 +297,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 				go func() {
 					defer close(done)
 					ssh.Exec(journalCtx, ip, "root", cfg.SSH.Key,
-						[]string{"journalctl", "-fu", "pixels-devtools", "--no-pager", "-o", "cat"})
+						[]string{"journalctl", "-fu", "pixels-devtools", "--no-pager", "-o", "cat"}, nil)
 				}()
 			}
 
@@ -309,7 +309,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 				<-done
 			}
 		}
-		return ssh.Console(ip, cfg.SSH.User, cfg.SSH.Key)
+		return ssh.Console(ip, cfg.SSH.User, cfg.SSH.Key, cfg.EnvForward)
 	}
 
 	return nil

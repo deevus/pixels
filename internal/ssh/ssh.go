@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"sort"
 	"time"
 
 	"github.com/deevus/pixels/internal/retry"
@@ -46,8 +47,9 @@ func WaitReady(ctx context.Context, host string, timeout time.Duration, log io.W
 }
 
 // Exec runs a command on the remote host via SSH and returns its exit code.
-func Exec(ctx context.Context, host, user, keyPath string, command []string) (int, error) {
-	args := append(sshArgs(host, user, keyPath), command...)
+// If env is non-nil, the entries are forwarded via SSH SetEnv.
+func Exec(ctx context.Context, host, user, keyPath string, command []string, env map[string]string) (int, error) {
+	args := append(sshArgs(host, user, keyPath, env), command...)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -65,7 +67,7 @@ func Exec(ctx context.Context, host, user, keyPath string, command []string) (in
 
 // Output runs a command on the remote host via SSH and returns its stdout.
 func Output(ctx context.Context, host, user, keyPath string, command []string) ([]byte, error) {
-	args := append(sshArgs(host, user, keyPath), command...)
+	args := append(sshArgs(host, user, keyPath, nil), command...)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Stderr = os.Stderr
 	return cmd.Output()
@@ -74,7 +76,7 @@ func Output(ctx context.Context, host, user, keyPath string, command []string) (
 // WaitProvisioned polls the remote host until /root/.devtools-provisioned exists.
 func WaitProvisioned(ctx context.Context, host, user, keyPath string, timeout time.Duration) error {
 	return retry.Poll(ctx, 2*time.Second, timeout, func(ctx context.Context) (bool, error) {
-		code, err := Exec(ctx, host, user, keyPath, []string{"sudo", "test", "-f", "/root/.devtools-provisioned"})
+		code, err := Exec(ctx, host, user, keyPath, []string{"sudo", "test", "-f", "/root/.devtools-provisioned"}, nil)
 		return err == nil && code == 0, nil
 	})
 }
@@ -82,12 +84,12 @@ func WaitProvisioned(ctx context.Context, host, user, keyPath string, timeout ti
 // TestAuth runs a quick SSH connection test (ssh ... true) to verify
 // key-based authentication works. Returns nil on success.
 func TestAuth(ctx context.Context, host, user, keyPath string) error {
-	args := append(sshArgs(host, user, keyPath), "true")
+	args := append(sshArgs(host, user, keyPath, nil), "true")
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	return cmd.Run()
 }
 
-func sshArgs(host, user, keyPath string) []string {
+func sshArgs(host, user, keyPath string, env map[string]string) []string {
 	args := []string{
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=" + os.DevNull,
@@ -97,6 +99,19 @@ func sshArgs(host, user, keyPath string) []string {
 	if keyPath != "" {
 		args = append(args, "-i", keyPath)
 	}
+
+	// Forward env vars via SSH protocol (requires AcceptEnv on server).
+	if len(env) > 0 {
+		keys := make([]string, 0, len(env))
+		for k := range env {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			args = append(args, "-o", fmt.Sprintf("SetEnv=%s=%s", k, env[k]))
+		}
+	}
+
 	args = append(args, user+"@"+host)
 	return args
 }
