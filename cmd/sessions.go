@@ -2,30 +2,30 @@ package cmd
 
 import (
 	"fmt"
-	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/deevus/pixels/internal/cache"
+	"github.com/deevus/pixels/internal/provision"
 	"github.com/deevus/pixels/internal/ssh"
 )
 
 func init() {
 	rootCmd.AddCommand(&cobra.Command{
-		Use:   "exec <name> -- <command...>",
-		Short: "Run a command in a pixel via SSH",
-		Args:  cobra.MinimumNArgs(2),
-		RunE:  runExec,
+		Use:   "sessions <name>",
+		Short: "List zmx sessions in a container",
+		Args:  cobra.ExactArgs(1),
+		RunE:  runSessions,
 	})
 }
 
-func runExec(cmd *cobra.Command, args []string) error {
+func runSessions(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	name := args[0]
-	command := args[1:]
 
-	// Try local cache first to avoid the WebSocket round-trip.
+	// Try local cache first for fast path.
 	var ip string
 	if cached := cache.Get(name); cached != nil && cached.IP != "" && cached.Status == "RUNNING" {
 		ip = cached.IP
@@ -60,17 +60,32 @@ func runExec(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("waiting for SSH: %w", err)
 	}
 
-	// Verify key auth; if it fails, write this machine's key via TrueNAS.
-	if err := ensureSSHAuth(cmd, ctx, ip, name); err != nil {
-		return err
+	cc := ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key}
+	out, err := ssh.OutputQuiet(ctx, cc, []string{"unset XDG_RUNTIME_DIR && zmx list"})
+	if err != nil {
+		return fmt.Errorf("zmx not available on %s", name)
 	}
 
-	exitCode, err := ssh.Exec(ctx, ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key, Env: cfg.EnvForward}, command)
-	if err != nil {
-		return err
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		fmt.Fprintln(cmd.OutOrStdout(), "No sessions")
+		return nil
 	}
-	if exitCode != 0 {
-		os.Exit(exitCode)
+
+	sessions := provision.ParseSessions(raw)
+	if len(sessions) == 0 {
+		fmt.Fprintln(cmd.OutOrStdout(), "No sessions")
+		return nil
 	}
-	return nil
+
+	tw := newTabWriter(cmd)
+	fmt.Fprintln(tw, "SESSION\tSTATUS")
+	for _, s := range sessions {
+		status := "running"
+		if s.EndedAt != "" {
+			status = "exited"
+		}
+		fmt.Fprintf(tw, "%s\t%s\n", s.Name, status)
+	}
+	return tw.Flush()
 }

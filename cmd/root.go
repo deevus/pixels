@@ -115,7 +115,7 @@ func readSSHPubKey() (string, error) {
 // ensureSSHAuth tests key auth and, if it fails, writes the current machine's
 // SSH public key to the container's authorized_keys via TrueNAS.
 func ensureSSHAuth(cmd *cobra.Command, ctx context.Context, ip, name string) error {
-	if err := ssh.TestAuth(ctx, ip, cfg.SSH.User, cfg.SSH.Key); err == nil {
+	if err := ssh.TestAuth(ctx, ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key}); err == nil {
 		return nil
 	}
 
