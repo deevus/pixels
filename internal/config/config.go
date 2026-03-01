@@ -11,13 +11,17 @@ import (
 )
 
 type Config struct {
-	TrueNAS    TrueNAS           `toml:"truenas"`
-	Defaults   Defaults          `toml:"defaults"`
-	SSH        SSH               `toml:"ssh"`
-	Checkpoint Checkpoint        `toml:"checkpoint"`
-	Provision  Provision         `toml:"provision"`
-	Network    Network           `toml:"network"`
-	Env        map[string]string `toml:"env"`
+	TrueNAS    TrueNAS        `toml:"truenas"`
+	Defaults   Defaults       `toml:"defaults"`
+	SSH        SSH            `toml:"ssh"`
+	Checkpoint Checkpoint     `toml:"checkpoint"`
+	Provision  Provision      `toml:"provision"`
+	Network    Network        `toml:"network"`
+	RawEnv     map[string]any `toml:"env"`
+
+	// Resolved env vars (not from TOML directly).
+	Env        map[string]string `toml:"-"` // image vars → /etc/environment
+	EnvForward map[string]string `toml:"-"` // session vars → SSH SetEnv
 }
 
 type TrueNAS struct {
@@ -109,11 +113,61 @@ func Load() (*Config, error) {
 
 	cfg.SSH.Key = expandHome(cfg.SSH.Key)
 
-	for k, v := range cfg.Env {
-		cfg.Env[k] = os.ExpandEnv(v)
+	if err := resolveEnv(cfg); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil
+}
+
+// resolveEnv splits RawEnv entries into image vars (Env) and session vars (EnvForward).
+//
+// Supported forms:
+//
+//	KEY = "value"                          → image var (with $VAR expansion)
+//	KEY = { value = "x" }                 → image var (with $VAR expansion)
+//	KEY = { forward = true }              → session var (from host env, skip if unset)
+//	KEY = { value = "x", session_only = true } → session var (literal, with $VAR expansion)
+func resolveEnv(cfg *Config) error {
+	if len(cfg.RawEnv) == 0 {
+		return nil
+	}
+
+	cfg.Env = make(map[string]string)
+	cfg.EnvForward = make(map[string]string)
+
+	for k, raw := range cfg.RawEnv {
+		switch v := raw.(type) {
+		case string:
+			cfg.Env[k] = os.ExpandEnv(v)
+		case map[string]any:
+			forward, _ := v["forward"].(bool)
+			sessionOnly, _ := v["session_only"].(bool)
+			value, _ := v["value"].(string)
+
+			switch {
+			case forward:
+				if hostVal, ok := os.LookupEnv(k); ok {
+					cfg.EnvForward[k] = hostVal
+				}
+			case sessionOnly && value != "":
+				cfg.EnvForward[k] = os.ExpandEnv(value)
+			case value != "":
+				cfg.Env[k] = os.ExpandEnv(value)
+			}
+		default:
+			return fmt.Errorf("env %q: unsupported type %T", k, raw)
+		}
+	}
+
+	if len(cfg.Env) == 0 {
+		cfg.Env = nil
+	}
+	if len(cfg.EnvForward) == 0 {
+		cfg.EnvForward = nil
+	}
+
+	return nil
 }
 
 func configPath() string {

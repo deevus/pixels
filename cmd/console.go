@@ -72,5 +72,5 @@ func runConsole(cmd *cobra.Command, args []string) error {
 	}
 
 	// Console replaces the process — does not return on success.
-	return ssh.Console(ip, cfg.SSH.User, cfg.SSH.Key)
+	return ssh.Console(ip, cfg.SSH.User, cfg.SSH.Key, cfg.EnvForward)
 }

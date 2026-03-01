@@ -288,6 +288,113 @@ LITERAL = "no-expansion-here"
 	}
 }
 
+func TestEnvForward(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfgDir := filepath.Join(dir, "pixels")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := `
+[env]
+IMAGE_VAR = "baked-in"
+EXPLICIT_IMAGE = { value = "explicit" }
+FORWARDED = { forward = true }
+FORWARDED_UNSET = { forward = true }
+SESSION_LITERAL = { value = "session-val", session_only = true }
+EXPANDED_IMAGE = { value = "$PIXELS_TEST_EXPAND" }
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("FORWARDED", "host-value")
+	// FORWARDED_UNSET intentionally not set.
+	t.Setenv("PIXELS_TEST_EXPAND", "expanded-val")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	// Image vars (cfg.Env).
+	if cfg.Env["IMAGE_VAR"] != "baked-in" {
+		t.Errorf("Env[IMAGE_VAR] = %q, want %q", cfg.Env["IMAGE_VAR"], "baked-in")
+	}
+	if cfg.Env["EXPLICIT_IMAGE"] != "explicit" {
+		t.Errorf("Env[EXPLICIT_IMAGE] = %q, want %q", cfg.Env["EXPLICIT_IMAGE"], "explicit")
+	}
+	if cfg.Env["EXPANDED_IMAGE"] != "expanded-val" {
+		t.Errorf("Env[EXPANDED_IMAGE] = %q, want %q", cfg.Env["EXPANDED_IMAGE"], "expanded-val")
+	}
+
+	// Image vars should NOT include session entries.
+	if _, ok := cfg.Env["FORWARDED"]; ok {
+		t.Error("Env should not contain FORWARDED (it's a session var)")
+	}
+	if _, ok := cfg.Env["SESSION_LITERAL"]; ok {
+		t.Error("Env should not contain SESSION_LITERAL (it's a session var)")
+	}
+
+	// Session vars (cfg.EnvForward).
+	if cfg.EnvForward["FORWARDED"] != "host-value" {
+		t.Errorf("EnvForward[FORWARDED] = %q, want %q", cfg.EnvForward["FORWARDED"], "host-value")
+	}
+	if _, ok := cfg.EnvForward["FORWARDED_UNSET"]; ok {
+		t.Error("EnvForward should not contain FORWARDED_UNSET (not set on host)")
+	}
+	if cfg.EnvForward["SESSION_LITERAL"] != "session-val" {
+		t.Errorf("EnvForward[SESSION_LITERAL] = %q, want %q", cfg.EnvForward["SESSION_LITERAL"], "session-val")
+	}
+
+	// Session vars should NOT include image entries.
+	if _, ok := cfg.EnvForward["IMAGE_VAR"]; ok {
+		t.Error("EnvForward should not contain IMAGE_VAR (it's an image var)")
+	}
+}
+
+func TestEnvForwardNilWhenEmpty(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Env != nil {
+		t.Errorf("Env = %v, want nil (no env configured)", cfg.Env)
+	}
+	if cfg.EnvForward != nil {
+		t.Errorf("EnvForward = %v, want nil (no env configured)", cfg.EnvForward)
+	}
+}
+
+func TestEnvUnsupportedType(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfgDir := filepath.Join(dir, "pixels")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// An integer value in [env] is not a valid env entry.
+	content := `
+[env]
+BAD = 42
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for unsupported env type, got nil")
+	}
+}
+
 func TestNetworkDefaults(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	for _, key := range []string{

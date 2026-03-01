@@ -93,7 +93,7 @@ func resolveNetworkContext(cmd *cobra.Command, name string) (*networkContext, er
 
 // sshAsRoot runs a command on the container as root via SSH.
 func sshAsRoot(cmd *cobra.Command, ip string, command []string) (int, error) {
-	return ssh.Exec(cmd.Context(), ip, "root", cfg.SSH.Key, command)
+	return ssh.Exec(cmd.Context(), ip, "root", cfg.SSH.Key, command, nil)
 }
 
 func runNetworkShow(cmd *cobra.Command, args []string) error {

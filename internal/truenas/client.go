@@ -137,6 +137,16 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		logf("Wrote DNS config (%d nameservers)", len(opts.DNS))
 	}
 
+	// Configure sshd to accept forwarded env vars via SSH SetEnv.
+	sshdDropin := rootfs + "/etc/ssh/sshd_config.d/pixels.conf"
+	if err := c.Filesystem.WriteFile(ctx, sshdDropin, truenas.WriteFileParams{
+		Content: []byte("AcceptEnv *\n"),
+		Mode:    0o644,
+	}); err != nil {
+		return fmt.Errorf("writing sshd drop-in: %w", err)
+	}
+	logf("Wrote sshd AcceptEnv config")
+
 	// Write environment variables to /etc/environment (sourced by PAM on login).
 	if len(opts.Env) > 0 {
 		var envBuf strings.Builder
