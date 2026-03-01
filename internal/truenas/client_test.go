@@ -775,6 +775,223 @@ func TestListSnapshots(t *testing.T) {
 	}
 }
 
+func TestWriteContainerFile(t *testing.T) {
+	tests := []struct {
+		name      string
+		pool      string
+		configErr error
+		writeErr  error
+		wantErr   string
+		wantPath  string
+	}{
+		{
+			name:     "writes to rootfs path",
+			pool:     "tank",
+			wantPath: "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs/etc/test.conf",
+		},
+		{
+			name:      "config error",
+			configErr: errors.New("api failure"),
+			wantErr:   "querying virt global config",
+		},
+		{
+			name:    "empty pool",
+			pool:    "",
+			wantErr: "no pool",
+		},
+		{
+			name:     "write error",
+			pool:     "tank",
+			writeErr: errors.New("disk full"),
+			wantErr:  "disk full",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var writtenPath string
+			var writtenContent string
+			var writtenMode uint32
+
+			c := &Client{
+				Virt: &truenas.MockVirtService{
+					GetGlobalConfigFunc: func(ctx context.Context) (*truenas.VirtGlobalConfig, error) {
+						if tt.configErr != nil {
+							return nil, tt.configErr
+						}
+						return &truenas.VirtGlobalConfig{Pool: tt.pool}, nil
+					},
+				},
+				Filesystem: &truenas.MockFilesystemService{
+					WriteFileFunc: func(ctx context.Context, path string, params truenas.WriteFileParams) error {
+						if tt.writeErr != nil {
+							return tt.writeErr
+						}
+						writtenPath = path
+						writtenContent = string(params.Content)
+						writtenMode = uint32(params.Mode)
+						return nil
+					},
+				},
+			}
+
+			err := c.WriteContainerFile(context.Background(), "px-test", "/etc/test.conf", []byte("hello"), 0o644)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error %q should contain %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if writtenPath != tt.wantPath {
+				t.Errorf("path = %q, want %q", writtenPath, tt.wantPath)
+			}
+			if writtenContent != "hello" {
+				t.Errorf("content = %q, want %q", writtenContent, "hello")
+			}
+			if writtenMode != 0o644 {
+				t.Errorf("mode = %o, want 644", writtenMode)
+			}
+		})
+	}
+}
+
+func TestReplaceContainerRootfs(t *testing.T) {
+	tests := []struct {
+		name       string
+		dataset    string
+		container  string
+		snapshot   string
+		configErr  error
+		createErr  error
+		runErr     error
+		wantErr    string
+		wantCmd    string
+		wantDelete bool
+	}{
+		{
+			name:       "creates cron job, runs, and deletes",
+			dataset:    "tank/ix-virt",
+			container:  "px-test",
+			snapshot:   "tank/ix-virt/containers/px-test@snap1",
+			wantCmd:    "/usr/sbin/zfs destroy -r tank/ix-virt/containers/px-test",
+			wantDelete: true,
+		},
+		{
+			name:      "config error",
+			configErr: errors.New("api down"),
+			container: "px-test",
+			snapshot:  "tank@snap",
+			wantErr:   "querying virt global config",
+		},
+		{
+			name:      "empty dataset",
+			dataset:   "",
+			container: "px-test",
+			snapshot:  "tank@snap",
+			wantErr:   "no dataset",
+		},
+		{
+			name:      "unsafe chars in snapshot",
+			dataset:   "tank/ix-virt",
+			container: "px-test",
+			snapshot:  "tank@snap; rm -rf /",
+			wantErr:   "unsafe character",
+		},
+		{
+			name:       "cron create error",
+			dataset:    "tank/ix-virt",
+			container:  "px-test",
+			snapshot:   "tank/ix-virt/containers/px-test@snap1",
+			createErr:  errors.New("cron api failed"),
+			wantErr:    "creating temp cron job",
+			wantDelete: false,
+		},
+		{
+			name:       "cron run error still deletes job",
+			dataset:    "tank/ix-virt",
+			container:  "px-test",
+			snapshot:   "tank/ix-virt/containers/px-test@snap1",
+			runErr:     errors.New("zfs command failed"),
+			wantErr:    "running ZFS clone",
+			wantDelete: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var createdCmd string
+			var deleted bool
+
+			c := &Client{
+				Virt: &truenas.MockVirtService{
+					GetGlobalConfigFunc: func(ctx context.Context) (*truenas.VirtGlobalConfig, error) {
+						if tt.configErr != nil {
+							return nil, tt.configErr
+						}
+						return &truenas.VirtGlobalConfig{Dataset: tt.dataset}, nil
+					},
+				},
+				Cron: &truenas.MockCronService{
+					CreateFunc: func(ctx context.Context, opts truenas.CreateCronJobOpts) (*truenas.CronJob, error) {
+						if tt.createErr != nil {
+							return nil, tt.createErr
+						}
+						createdCmd = opts.Command
+						if opts.User != "root" {
+							t.Errorf("cron user = %q, want root", opts.User)
+						}
+						if opts.Enabled {
+							t.Error("cron job should be disabled")
+						}
+						return &truenas.CronJob{ID: 42}, nil
+					},
+					RunFunc: func(ctx context.Context, id int64, skipDisabled bool) error {
+						if id != 42 {
+							t.Errorf("run id = %d, want 42", id)
+						}
+						return tt.runErr
+					},
+					DeleteFunc: func(ctx context.Context, id int64) error {
+						if id != 42 {
+							t.Errorf("delete id = %d, want 42", id)
+						}
+						deleted = true
+						return nil
+					},
+				},
+			}
+
+			err := c.ReplaceContainerRootfs(context.Background(), tt.container, tt.snapshot)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error %q should contain %q", err.Error(), tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.wantCmd != "" && !strings.Contains(createdCmd, tt.wantCmd) {
+				t.Errorf("cron command %q should contain %q", createdCmd, tt.wantCmd)
+			}
+			if tt.wantDelete && !deleted {
+				t.Error("cron job should have been deleted")
+			}
+			if !tt.wantDelete && deleted {
+				t.Error("cron job should not have been deleted")
+			}
+		})
+	}
+}
+
 func TestWriteAuthorizedKey(t *testing.T) {
 	tests := []struct {
 		name       string
