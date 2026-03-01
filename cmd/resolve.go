@@ -58,7 +58,13 @@ func resolveRunningIP(ctx context.Context, name string) (string, error) {
 	}
 	defer client.Close()
 
-	instance, err := client.Virt.GetInstance(ctx, containerName(name))
+	return lookupRunningIP(ctx, client.Virt, name)
+}
+
+// lookupRunningIP fetches a container via the Virt API, verifies it is running,
+// and returns its IP. It caches the result on success.
+func lookupRunningIP(ctx context.Context, virt truenas.VirtServiceAPI, name string) (string, error) {
+	instance, err := virt.GetInstance(ctx, containerName(name))
 	if err != nil {
 		return "", fmt.Errorf("looking up %s: %w", name, err)
 	}
