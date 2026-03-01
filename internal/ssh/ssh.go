@@ -11,8 +11,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/deevus/pixels/internal/retry"
 )
 
 // WaitReady polls the host's SSH port until it accepts connections or the timeout expires.
@@ -66,6 +64,22 @@ func Exec(ctx context.Context, host, user, keyPath string, command []string, env
 	return 0, nil
 }
 
+// ExecQuiet runs a non-interactive command on the remote host via SSH and
+// returns its exit code. Unlike Exec, it does not attach stdin/stdout/stderr.
+func ExecQuiet(ctx context.Context, host, user, keyPath string, command []string) (int, error) {
+	args := append(sshArgs(host, user, keyPath, nil), command...)
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.ExitCode(), nil
+		}
+		return 1, err
+	}
+	return 0, nil
+}
+
 // Output runs a command on the remote host via SSH and returns its stdout.
 func Output(ctx context.Context, host, user, keyPath string, command []string) ([]byte, error) {
 	args := append(sshArgs(host, user, keyPath, nil), command...)
@@ -74,12 +88,12 @@ func Output(ctx context.Context, host, user, keyPath string, command []string) (
 	return cmd.Output()
 }
 
-// WaitProvisioned polls the remote host until /root/.devtools-provisioned exists.
-func WaitProvisioned(ctx context.Context, host, user, keyPath string, timeout time.Duration) error {
-	return retry.Poll(ctx, 2*time.Second, timeout, func(ctx context.Context) (bool, error) {
-		code, err := Exec(ctx, host, user, keyPath, []string{"sudo", "test", "-f", "/root/.devtools-provisioned"}, nil)
-		return err == nil && code == 0, nil
-	})
+// OutputQuiet runs a command on the remote host via SSH and returns its stdout,
+// discarding stderr. Use this when parsing command output programmatically.
+func OutputQuiet(ctx context.Context, host, user, keyPath string, command []string) ([]byte, error) {
+	args := append(sshArgs(host, user, keyPath, nil), command...)
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+	return cmd.Output()
 }
 
 // TestAuth runs a quick SSH connection test (ssh ... true) to verify
