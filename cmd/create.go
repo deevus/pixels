@@ -219,6 +219,9 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Compute provisioning steps (devtools, egress) before writing files.
+	steps := provision.Steps(egressMode, cfg.Provision.DevToolsEnabled())
+
 	// Provision while the container is running (rootfs only mounted when up).
 	noProvision, _ := cmd.Flags().GetBool("no-provision")
 	provisionEnabled := cfg.Provision.IsEnabled() && !noProvision && !skipProvision
@@ -232,6 +235,9 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			DevTools:    cfg.Provision.DevToolsEnabled(),
 			Egress:      egressMode,
 			EgressAllow: cfg.Network.Allow,
+		}
+		if len(steps) > 0 {
+			provOpts.ProvisionScript = provision.Script(steps)
 		}
 		if verbose {
 			provOpts.Log = cmd.ErrOrStderr()
@@ -288,38 +294,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Phase 2: zmx-orchestrated provisioning (after SSH is ready).
-	steps := provision.Steps(egressMode, cfg.Provision.DevToolsEnabled())
-	zmxReady := false
-	if provisionEnabled && ip != "" && len(steps) > 0 {
-		runner := &provision.Runner{Host: ip, User: "root", KeyPath: cfg.SSH.Key}
-		if verbose {
-			runner.Log = cmd.ErrOrStderr()
-		}
-		setStatus("Installing zmx...")
-		if err := runner.InstallZmx(ctx); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: zmx install failed: %v\n", err)
-		} else {
-			zmxReady = true
-			for i, s := range steps {
-				setStatus(fmt.Sprintf("Running %s...", s.Name))
-				if err := runner.Run(ctx, s); err != nil {
-					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to start %s: %v\n", s.Name, err)
-					break
-				}
-				// Wait for each step before starting the next so earlier
-				// steps (e.g. devtools downloads) finish before later ones
-				// (e.g. egress) lock down the network.
-				if i < len(steps)-1 {
-					if err := runner.Wait(ctx, s.Name); err != nil {
-						fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %s failed: %v\n", s.Name, err)
-						break
-					}
-				}
-			}
-		}
-	}
-
 	// Cache IP and status for fast exec/console lookups.
 	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
 	logv(cmd, "Cached IP=%s status=%s for %s", ip, instance.Status, name)
@@ -334,19 +308,16 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(cmd.OutOrStdout(), "  Console:  pixels console %s\n", name)
 	openConsole, _ := cmd.Flags().GetBool("console")
 
-	if zmxReady && len(steps) > 0 && !openConsole {
+	if len(steps) > 0 && !openConsole {
 		fmt.Fprintf(cmd.OutOrStdout(), "  Status:   pixels status %s\n", name)
 	}
 
 	if openConsole && ip != "" {
-		if zmxReady && len(steps) > 0 {
-			setStatus("Waiting for provisioning to complete...")
-			runner := &provision.Runner{Host: ip, User: "root", KeyPath: cfg.SSH.Key}
-			if err := runner.Wait(ctx, provision.StepNames(steps)...); err != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", err)
-				fmt.Fprintf(cmd.ErrOrStderr(), "  Debug: zmx attach <step> from inside the console\n")
-			}
-		}
+		runner := &provision.Runner{Host: ip, User: "root", KeyPath: cfg.SSH.Key}
+		runner.WaitProvisioned(ctx, func(status string) {
+			setStatus(status)
+			logv(cmd, "Provision: %s", status)
+		})
 		stopSpinner()
 		return ssh.Console(ip, cfg.SSH.User, cfg.SSH.Key, cfg.EnvForward)
 	}

@@ -22,42 +22,6 @@ func init() {
 	})
 }
 
-// zmxSession holds parsed fields from a zmx list output line.
-type zmxSession struct {
-	Name     string
-	PID      string
-	EndedAt  string // unix timestamp or empty
-	ExitCode string // exit code or empty
-	Cmd      string
-}
-
-func parseZmxList(raw string) []zmxSession {
-	if raw == "" {
-		return nil
-	}
-	var sessions []zmxSession
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "session_name=") {
-			continue
-		}
-		fields := make(map[string]string)
-		for _, part := range strings.Split(line, "\t") {
-			if k, v, ok := strings.Cut(part, "="); ok {
-				fields[k] = v
-			}
-		}
-		sessions = append(sessions, zmxSession{
-			Name:     fields["session_name"],
-			PID:      fields["pid"],
-			EndedAt:  fields["task_ended_at"],
-			ExitCode: fields["task_exit_code"],
-			Cmd:      fields["cmd"],
-		})
-	}
-	return sessions
-}
-
 func runStatus(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	name := args[0]
@@ -105,10 +69,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	sessions := parseZmxList(raw)
+	sessions := provision.ParseSessions(raw)
 
 	// Filter to px-* sessions (our provisioning steps).
-	var steps []zmxSession
+	var steps []provision.Session
 	for _, s := range sessions {
 		if strings.HasPrefix(s.Name, "px-") {
 			steps = append(steps, s)
@@ -116,7 +80,13 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(steps) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "No provisioning steps found")
+		if runner.IsProvisioned(ctx) {
+			fmt.Fprintln(cmd.OutOrStdout(), "Provisioning complete")
+		} else if runner.HasProvisionScript(ctx) {
+			fmt.Fprintln(cmd.OutOrStdout(), "Provisioning in progress...")
+		} else {
+			fmt.Fprintln(cmd.OutOrStdout(), "No provisioning steps found")
+		}
 		return nil
 	}
 
