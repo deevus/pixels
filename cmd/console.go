@@ -115,6 +115,10 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		remoteCmd = zmxRemoteCmd(ctx, cc, session)
 	}
 
+	if remoteCmd != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Detach: Ctrl+\\ or type 'detach'\n")
+	}
+
 	// Console replaces the process — does not return on success.
 	return ssh.Console(cc, remoteCmd)
 }
