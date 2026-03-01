@@ -8,10 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/briandowns/spinner"
 	truenas "github.com/deevus/truenas-go"
 	"github.com/spf13/cobra"
 
 	"github.com/deevus/pixels/internal/cache"
+	"github.com/deevus/pixels/internal/provision"
 	"github.com/deevus/pixels/internal/retry"
 	"github.com/deevus/pixels/internal/ssh"
 	tnc "github.com/deevus/pixels/internal/truenas"
@@ -65,6 +67,26 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	logv(cmd, "Config: image=%s cpu=%s memory=%dMiB egress=%s", image, cpu, memory, egressMode)
+
+	// Spinner for non-verbose mode — shows current phase on stderr.
+	var spin *spinner.Spinner
+	if !verbose {
+		spin = spinner.New(spinner.CharSets[14], 100*time.Millisecond, spinner.WithWriter(cmd.ErrOrStderr()))
+	}
+	setStatus := func(msg string) {
+		if spin != nil {
+			spin.Suffix = "  " + msg
+			if !spin.Active() {
+				spin.Start()
+			}
+		}
+	}
+	stopSpinner := func() {
+		if spin != nil && spin.Active() {
+			spin.Stop()
+		}
+	}
+	defer stopSpinner()
 
 	// Parse --from flag: "container" or "container:label"
 	var fromSource, fromLabel string
@@ -163,9 +185,9 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	// (pool.dataset.* APIs can't see .ix-virt managed datasets).
 	if skipProvision {
 		if tempSnapshot {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Cloning from %s...\n", fromSource)
+			setStatus(fmt.Sprintf("Cloning from %s...", fromSource))
 		} else {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Cloning from %s checkpoint %q...\n", fromSource, fromLabel)
+			setStatus(fmt.Sprintf("Cloning from %s checkpoint %q...", fromSource, fromLabel))
 		}
 
 		logv(cmd, "Stopping %s for rootfs replacement...", containerName(name))
@@ -218,7 +240,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			len(cfg.Env) > 0 || provOpts.DevTools
 
 		if needsProvision {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Provisioning...\n")
+			setStatus("Provisioning...")
 			logv(cmd, "SSH key: %v, DNS: %d, Env: %d, DevTools: %v, Egress: %s",
 				pubKey != "", len(cfg.Defaults.DNS), len(cfg.Env), provOpts.DevTools, egressMode)
 
@@ -255,6 +277,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			timeout = 30 * time.Second
 		}
 		if provisionEnabled || skipProvision {
+			setStatus("Waiting for SSH...")
 			var sshLog io.Writer
 			if verbose {
 				sshLog = cmd.ErrOrStderr()
@@ -265,10 +288,43 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Phase 2: zmx-orchestrated provisioning (after SSH is ready).
+	steps := provision.Steps(egressMode, cfg.Provision.DevToolsEnabled())
+	zmxReady := false
+	if provisionEnabled && ip != "" && len(steps) > 0 {
+		runner := &provision.Runner{Host: ip, User: "root", KeyPath: cfg.SSH.Key}
+		if verbose {
+			runner.Log = cmd.ErrOrStderr()
+		}
+		setStatus("Installing zmx...")
+		if err := runner.InstallZmx(ctx); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: zmx install failed: %v\n", err)
+		} else {
+			zmxReady = true
+			for i, s := range steps {
+				setStatus(fmt.Sprintf("Running %s...", s.Name))
+				if err := runner.Run(ctx, s); err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "Warning: failed to start %s: %v\n", s.Name, err)
+					break
+				}
+				// Wait for each step before starting the next so earlier
+				// steps (e.g. devtools downloads) finish before later ones
+				// (e.g. egress) lock down the network.
+				if i < len(steps)-1 {
+					if err := runner.Wait(ctx, s.Name); err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %s failed: %v\n", s.Name, err)
+						break
+					}
+				}
+			}
+		}
+	}
+
 	// Cache IP and status for fast exec/console lookups.
 	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
 	logv(cmd, "Cached IP=%s status=%s for %s", ip, instance.Status, name)
 
+	stopSpinner()
 	elapsed := time.Since(start).Truncate(100 * time.Millisecond)
 	fmt.Fprintf(cmd.OutOrStdout(), "Created %s in %s\n", containerName(name), elapsed)
 	fmt.Fprintf(cmd.OutOrStdout(), "  Hostname: %s\n", containerName(name))
@@ -277,38 +333,21 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  Console:  pixels console %s\n", name)
 	openConsole, _ := cmd.Flags().GetBool("console")
-	devToolsActive := provisionEnabled && cfg.Provision.DevToolsEnabled()
 
-	if devToolsActive && !openConsole {
-		fmt.Fprintf(cmd.OutOrStdout(), "  Dev tools installing in background (sudo journalctl -fu pixels-devtools)\n")
+	if zmxReady && len(steps) > 0 && !openConsole {
+		fmt.Fprintf(cmd.OutOrStdout(), "  Status:   pixels status %s\n", name)
 	}
 
 	if openConsole && ip != "" {
-		if devToolsActive {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Waiting for dev tools to finish installing...\n")
-
-			// Stream journal output so the user can see progress.
-			var journalCancel context.CancelFunc
-			var done chan struct{}
-			if verbose {
-				var journalCtx context.Context
-				journalCtx, journalCancel = context.WithCancel(ctx)
-				done = make(chan struct{})
-				go func() {
-					defer close(done)
-					ssh.Exec(journalCtx, ip, "root", cfg.SSH.Key,
-						[]string{"journalctl", "-fu", "pixels-devtools", "--no-pager", "-o", "cat"}, nil)
-				}()
-			}
-
-			if err := ssh.WaitProvisioned(ctx, ip, cfg.SSH.User, cfg.SSH.Key, 10*time.Minute); err != nil {
+		if zmxReady && len(steps) > 0 {
+			setStatus("Waiting for provisioning to complete...")
+			runner := &provision.Runner{Host: ip, User: "root", KeyPath: cfg.SSH.Key}
+			if err := runner.Wait(ctx, provision.StepNames(steps)...); err != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "Warning: %v\n", err)
-			}
-			if journalCancel != nil {
-				journalCancel()
-				<-done
+				fmt.Fprintf(cmd.ErrOrStderr(), "  Debug: zmx attach <step> from inside the console\n")
 			}
 		}
+		stopSpinner()
 		return ssh.Console(ip, cfg.SSH.User, cfg.SSH.Key, cfg.EnvForward)
 	}
 
