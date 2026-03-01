@@ -18,7 +18,7 @@ var validSessionName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 func init() {
 	cmd := &cobra.Command{
 		Use:   "console <name>",
-		Short: "Open an interactive SSH session",
+		Short: "Open a persistent SSH session (zmx)",
 		Args:  cobra.ExactArgs(1),
 		RunE:  runConsole,
 	}

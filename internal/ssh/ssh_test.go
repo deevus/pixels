@@ -133,6 +133,26 @@ func TestConsoleArgs(t *testing.T) {
 		}
 	})
 
+	t.Run("no key with remote command", func(t *testing.T) {
+		cc := ConnConfig{Host: "10.0.0.1", User: "pixel"}
+		args := consoleArgs(cc, "zmx attach console")
+		last3 := args[len(args)-3:]
+		if last3[0] != "-t" {
+			t.Errorf("expected -t before user@host, got %q", last3[0])
+		}
+		if last3[1] != "pixel@10.0.0.1" {
+			t.Errorf("expected user@host, got %q", last3[1])
+		}
+		if last3[2] != "zmx attach console" {
+			t.Errorf("expected remote command, got %q", last3[2])
+		}
+		for _, a := range args {
+			if a == "-i" {
+				t.Error("should not include -i when keyPath is empty")
+			}
+		}
+	})
+
 	t.Run("with remote command", func(t *testing.T) {
 		cc := ConnConfig{Host: "10.0.0.1", User: "pixel", KeyPath: "/tmp/key"}
 		args := consoleArgs(cc, "zmx attach console")
