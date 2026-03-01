@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/deevus/pixels/internal/retry"
@@ -101,15 +102,24 @@ func sshArgs(host, user, keyPath string, env map[string]string) []string {
 	}
 
 	// Forward env vars via SSH protocol (requires AcceptEnv on server).
+	// All vars must be in a single SetEnv directive (multiple -o SetEnv
+	// flags don't stack in OpenSSH — only the first takes effect).
 	if len(env) > 0 {
 		keys := make([]string, 0, len(env))
 		for k := range env {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		for _, k := range keys {
-			args = append(args, "-o", fmt.Sprintf("SetEnv=%s=%s", k, env[k]))
+
+		var setenv strings.Builder
+		setenv.WriteString("SetEnv=")
+		for i, k := range keys {
+			if i > 0 {
+				setenv.WriteByte(' ')
+			}
+			fmt.Fprintf(&setenv, "%s=%s", k, env[k])
 		}
+		args = append(args, "-o", setenv.String())
 	}
 
 	args = append(args, user+"@"+host)

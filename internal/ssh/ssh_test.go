@@ -64,29 +64,24 @@ func TestSSHArgs(t *testing.T) {
 		}
 		args := sshArgs("10.0.0.1", "pixel", "", env)
 
-		// SetEnv options should appear before user@host (last element).
-		// Keys should be sorted alphabetically.
-		wantPairs := []string{
-			"SetEnv=API_KEY=sk-secret",
-			"SetEnv=GITHUB_TOKEN=ghp_abc123",
-		}
-		var gotPairs []string
+		// All vars should be in a single SetEnv directive (space-separated,
+		// sorted by key), preceded by -o. Multiple -o SetEnv flags don't
+		// stack in OpenSSH — only the first takes effect.
+		want := "SetEnv=API_KEY=sk-secret GITHUB_TOKEN=ghp_abc123"
+		var found bool
 		for i, a := range args {
 			if strings.HasPrefix(a, "SetEnv=") {
-				// Verify preceding arg is -o.
 				if i == 0 || args[i-1] != "-o" {
 					t.Errorf("SetEnv arg %q not preceded by -o", a)
 				}
-				gotPairs = append(gotPairs, a)
+				if a != want {
+					t.Errorf("SetEnv = %q, want %q", a, want)
+				}
+				found = true
 			}
 		}
-		if len(gotPairs) != len(wantPairs) {
-			t.Fatalf("got %d SetEnv pairs, want %d: %v", len(gotPairs), len(wantPairs), gotPairs)
-		}
-		for i, want := range wantPairs {
-			if gotPairs[i] != want {
-				t.Errorf("SetEnv[%d] = %q, want %q", i, gotPairs[i], want)
-			}
+		if !found {
+			t.Error("SetEnv not found in args")
 		}
 
 		// user@host should still be last.
