@@ -236,7 +236,7 @@ func TestProvision(t *testing.T) {
 				DevTools:  true,
 			},
 			pool:      "tank",
-			wantCalls: 8, // dns + sshd config + env + root key + pixel key + setup script + systemd unit + rc.local
+			wantCalls: 7, // dns + sshd config + env + root key + pixel key + setup script + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				paths := make(map[string]writeCall)
 				for _, c := range calls {
@@ -255,22 +255,21 @@ func TestProvision(t *testing.T) {
 				if setup.mode != 0o755 {
 					t.Errorf("setup script mode = %o, want 755", setup.mode)
 				}
-				for _, want := range []string{"mise", "npm install", "claude-code", "opencode", "su - pixel"} {
+				for _, want := range []string{"mise", "claude-code", "opencode", "codex", "su - pixel"} {
 					if !strings.Contains(setup.content, want) {
 						t.Errorf("setup script missing %q", want)
 					}
 				}
 
-				// Systemd unit.
-				unit := paths[rootfs+"/etc/systemd/system/pixels-devtools.service"]
-				if !strings.Contains(unit.content, "pixels-setup-devtools.sh") {
-					t.Errorf("systemd unit missing ExecStart: %s", unit.content)
+				// No systemd unit should be written.
+				if _, ok := paths[rootfs+"/etc/systemd/system/pixels-devtools.service"]; ok {
+					t.Error("systemd unit should not be written (zmx handles devtools)")
 				}
 
-				// rc.local has devtools service start and pixel user.
+				// rc.local should have SSH bootstrap only, no devtools.
 				rc := paths[rootfs+"/etc/rc.local"]
-				if !strings.Contains(rc.content, "pixels-devtools.service") {
-					t.Errorf("rc.local missing devtools service start: %s", rc.content)
+				if strings.Contains(rc.content, "pixels-devtools") {
+					t.Error("rc.local should not reference devtools")
 				}
 				for _, want := range []string{"set -e", "useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel", "NOPASSWD:ALL"} {
 					if !strings.Contains(rc.content, want) {
@@ -364,7 +363,7 @@ func TestProvision(t *testing.T) {
 				Egress:    "agent",
 			},
 			pool:      "tank",
-			wantCalls: 10, // sshd config + root key + pixel key + domains + cidrs + nftables.conf + resolve script + safe-apt + sudoers + rc.local
+			wantCalls: 12, // sshd config + root key + pixel key + domains + cidrs + nftables.conf + resolve script + safe-apt + sudoers.restricted + setup-egress + enable-egress + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				paths := make(map[string]writeCall)
 				for _, c := range calls {
@@ -390,8 +389,24 @@ func TestProvision(t *testing.T) {
 					t.Errorf("resolve script mode = %o, want 755", script.mode)
 				}
 
-				// Sudoers should be restricted.
-				sudoers := paths[rootfs+"/etc/sudoers.d/pixel"]
+				// Egress setup and enable scripts.
+				setup := paths[rootfs+"/usr/local/bin/pixels-setup-egress.sh"]
+				if setup.mode != 0o755 {
+					t.Errorf("egress setup script mode = %o, want 755", setup.mode)
+				}
+				if !strings.Contains(setup.content, "nftables") {
+					t.Error("egress setup script missing nftables install")
+				}
+				enable := paths[rootfs+"/usr/local/bin/pixels-enable-egress.sh"]
+				if enable.mode != 0o755 {
+					t.Errorf("egress enable script mode = %o, want 755", enable.mode)
+				}
+				if !strings.Contains(enable.content, "pixels-resolve-egress.sh") {
+					t.Error("egress enable script missing resolve call")
+				}
+
+				// Restricted sudoers staged at .restricted path.
+				sudoers := paths[rootfs+"/etc/sudoers.d/pixel.restricted"]
 				if strings.Contains(sudoers.content, "NOPASSWD: ALL") {
 					t.Error("sudoers should be restricted, not blanket ALL")
 				}
@@ -399,13 +414,47 @@ func TestProvision(t *testing.T) {
 					t.Error("sudoers missing safe-apt allowlist")
 				}
 
-				// rc.local should include nftables setup.
+				// rc.local should be SSH-only bootstrap (no egress setup).
 				rc := paths[rootfs+"/etc/rc.local"]
-				if !strings.Contains(rc.content, "nftables") {
-					t.Error("rc.local missing nftables install")
+				if strings.Contains(rc.content, "nftables") {
+					t.Error("rc.local should not contain nftables (zmx handles egress)")
 				}
-				if !strings.Contains(rc.content, "pixels-resolve-egress") {
-					t.Error("rc.local missing resolve script call")
+				// rc.local always writes unrestricted sudoers; zmx egress step replaces it.
+				if !strings.Contains(rc.content, "NOPASSWD:ALL") {
+					t.Error("rc.local should have unrestricted sudoers")
+				}
+			},
+		},
+		{
+			name: "provision script written when provided",
+			opts: ProvisionOpts{
+				SSHPubKey:       "ssh-ed25519 AAAA test@host",
+				ProvisionScript: "#!/bin/sh\necho hello\n",
+			},
+			pool:      "tank",
+			wantCalls: 5, // sshd config + root key + pixel key + provision script + rc.local
+			check: func(t *testing.T, calls []writeCall) {
+				paths := make(map[string]writeCall)
+				for _, c := range calls {
+					paths[c.path] = c
+				}
+				rootfs := "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs"
+
+				ps := paths[rootfs+"/usr/local/bin/pixels-provision.sh"]
+				if ps.path == "" {
+					t.Fatal("provision script not written")
+				}
+				if ps.mode != 0o755 {
+					t.Errorf("provision script mode = %o, want 755", ps.mode)
+				}
+				if !strings.Contains(ps.content, "echo hello") {
+					t.Error("provision script missing content")
+				}
+
+				// rc.local should include nohup launch.
+				rc := paths[rootfs+"/etc/rc.local"]
+				if !strings.Contains(rc.content, "pixels-provision.sh") {
+					t.Error("rc.local missing provision script launch")
 				}
 			},
 		},
@@ -433,7 +482,7 @@ func TestProvision(t *testing.T) {
 				EgressAllow: []string{"custom.example.com"},
 			},
 			pool:      "tank",
-			wantCalls: 9, // sshd config + root key + pixel key + domains + nftables.conf + resolve script + safe-apt + sudoers + rc.local
+			wantCalls: 11, // sshd config + root key + pixel key + domains + nftables.conf + resolve script + safe-apt + sudoers + setup-egress + enable-egress + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				rootfs := "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs"
 				for _, c := range calls {
@@ -577,14 +626,16 @@ func TestProvision(t *testing.T) {
 				t.Errorf("rc.local mode = %o, want 755", rc.mode)
 			}
 
-			// Verify rc.local provisions the pixel user.
+			// Verify rc.local provisions the pixel user and launches provision script.
 			for _, want := range []string{
 				"set -e",
-				"openssh-server sudo",
+				"openssh-server sudo curl",
 				"useradd -m -u 1000 -g 1000 -s /bin/bash -G sudo pixel",
 				"NOPASSWD:ALL",
 				"/home/pixel/.ssh",
 				"chown -R pixel:pixel",
+				"pixels-provision.sh",
+				"nohup",
 			} {
 				if !strings.Contains(rc.content, want) {
 					t.Errorf("rc.local missing %q", want)

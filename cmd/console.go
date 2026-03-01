@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/briandowns/spinner"
 	"github.com/spf13/cobra"
 
 	"github.com/deevus/pixels/internal/cache"
+	"github.com/deevus/pixels/internal/provision"
 	"github.com/deevus/pixels/internal/ssh"
 )
 
@@ -69,6 +71,26 @@ func runConsole(cmd *cobra.Command, args []string) error {
 	// Verify key auth; if it fails, write this machine's key via TrueNAS.
 	if err := ensureSSHAuth(cmd, ctx, ip, name); err != nil {
 		return err
+	}
+
+	// Wait for provisioning to finish before opening the console.
+	runner := &provision.Runner{Host: ip, User: "root", KeyPath: cfg.SSH.Key}
+	var spin *spinner.Spinner
+	if !verbose {
+		spin = spinner.New(spinner.CharSets[14], 100*time.Millisecond, spinner.WithWriter(cmd.ErrOrStderr()))
+	}
+	runner.WaitProvisioned(ctx, func(status string) {
+		if spin != nil {
+			spin.Suffix = "  " + status
+			if !spin.Active() {
+				spin.Start()
+			}
+		} else {
+			logv(cmd, "Provision: %s", status)
+		}
+	})
+	if spin != nil && spin.Active() {
+		spin.Stop()
 	}
 
 	// Console replaces the process — does not return on success.
