@@ -160,6 +160,23 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 	}
 	logf("Wrote sshd AcceptEnv config")
 
+	// Shell alias for detaching zmx sessions.
+	if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/profile.d/pixels.sh", truenas.WriteFileParams{
+		Content: []byte("alias detach='zmx detach'\n"),
+		Mode:    0o644,
+	}); err != nil {
+		return fmt.Errorf("writing /etc/profile.d/pixels.sh: %w", err)
+	}
+
+	// MOTD with detach hint (shown on interactive SSH login, not exec).
+	if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/motd", truenas.WriteFileParams{
+		Content: []byte("Detach: Ctrl+\\ or type 'detach'\n"),
+		Mode:    0o644,
+	}); err != nil {
+		return fmt.Errorf("writing /etc/motd: %w", err)
+	}
+	logf("Wrote detach alias + MOTD")
+
 	// Write environment variables to /etc/environment (sourced by PAM on login).
 	if len(opts.Env) > 0 {
 		var envBuf strings.Builder

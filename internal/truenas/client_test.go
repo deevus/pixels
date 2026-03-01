@@ -236,7 +236,7 @@ func TestProvision(t *testing.T) {
 				DevTools:  true,
 			},
 			pool:      "tank",
-			wantCalls: 7, // dns + sshd config + env + root key + pixel key + setup script + rc.local
+			wantCalls: 9, // dns + sshd config + profile.d + motd + env + root key + pixel key + setup script + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				paths := make(map[string]writeCall)
 				for _, c := range calls {
@@ -285,7 +285,7 @@ func TestProvision(t *testing.T) {
 				DNS:       []string{"1.1.1.1", "8.8.8.8"},
 			},
 			pool:      "tank",
-			wantCalls: 5, // sshd config + dns + root key + pixel key + rc.local
+			wantCalls: 7, // sshd config + dns + profile.d + motd + root key + pixel key + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				// No devtools files should be written.
 				for _, c := range calls {
@@ -307,7 +307,7 @@ func TestProvision(t *testing.T) {
 				SSHPubKey: "ssh-ed25519 AAAA test@host",
 			},
 			pool:      "tank",
-			wantCalls: 4, // sshd config + root key + pixel key + rc.local
+			wantCalls: 6, // sshd config + profile.d + motd + root key + pixel key + rc.local
 		},
 		{
 			name: "env only, no ssh key",
@@ -315,10 +315,10 @@ func TestProvision(t *testing.T) {
 				Env: map[string]string{"FOO": "bar"},
 			},
 			pool:      "tank",
-			wantCalls: 2, // sshd config + /etc/environment
+			wantCalls: 4, // sshd config + profile.d + motd + /etc/environment
 			check: func(t *testing.T, calls []writeCall) {
-				if !strings.Contains(calls[1].path, "/etc/environment") {
-					t.Errorf("expected /etc/environment, got %s", calls[1].path)
+				if !strings.Contains(calls[3].path, "/etc/environment") {
+					t.Errorf("expected /etc/environment, got %s", calls[3].path)
 				}
 			},
 		},
@@ -328,13 +328,13 @@ func TestProvision(t *testing.T) {
 				DNS: []string{"1.1.1.1"},
 			},
 			pool:      "tank",
-			wantCalls: 2, // dns + sshd config
+			wantCalls: 4, // dns + sshd config + profile.d + motd
 		},
 		{
 			name:      "no ssh key no dns",
 			opts:      ProvisionOpts{},
 			pool:      "tank",
-			wantCalls: 1, // sshd config only
+			wantCalls: 3, // sshd config + profile.d + motd
 		},
 		{
 			name:      "global config error",
@@ -363,7 +363,7 @@ func TestProvision(t *testing.T) {
 				Egress:    "agent",
 			},
 			pool:      "tank",
-			wantCalls: 12, // sshd config + root key + pixel key + domains + cidrs + nftables.conf + resolve script + safe-apt + sudoers.restricted + setup-egress + enable-egress + rc.local
+			wantCalls: 14, // sshd config + profile.d + motd + root key + pixel key + domains + cidrs + nftables.conf + resolve script + safe-apt + sudoers.restricted + setup-egress + enable-egress + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				paths := make(map[string]writeCall)
 				for _, c := range calls {
@@ -432,7 +432,7 @@ func TestProvision(t *testing.T) {
 				ProvisionScript: "#!/bin/sh\necho hello\n",
 			},
 			pool:      "tank",
-			wantCalls: 5, // sshd config + root key + pixel key + provision script + rc.local
+			wantCalls: 7, // sshd config + profile.d + motd + root key + pixel key + provision script + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				paths := make(map[string]writeCall)
 				for _, c := range calls {
@@ -465,7 +465,7 @@ func TestProvision(t *testing.T) {
 				Egress:    "unrestricted",
 			},
 			pool:      "tank",
-			wantCalls: 4, // sshd config + root key + pixel key + rc.local (no egress files)
+			wantCalls: 6, // sshd config + profile.d + motd + root key + pixel key + rc.local (no egress files)
 			check: func(t *testing.T, calls []writeCall) {
 				for _, c := range calls {
 					if strings.Contains(c.path, "pixels-egress") || strings.Contains(c.path, "nftables") {
@@ -482,7 +482,7 @@ func TestProvision(t *testing.T) {
 				EgressAllow: []string{"custom.example.com"},
 			},
 			pool:      "tank",
-			wantCalls: 11, // sshd config + root key + pixel key + domains + nftables.conf + resolve script + safe-apt + sudoers + setup-egress + enable-egress + rc.local
+			wantCalls: 13, // sshd config + profile.d + motd + root key + pixel key + domains + nftables.conf + resolve script + safe-apt + sudoers + setup-egress + enable-egress + rc.local
 			check: func(t *testing.T, calls []writeCall) {
 				rootfs := "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs"
 				for _, c := range calls {
@@ -586,6 +586,9 @@ func TestProvision(t *testing.T) {
 				t.Error("sshd config missing AcceptEnv *")
 			}
 			idx++
+
+			// Skip profile.d/pixels.sh and /etc/motd (always written).
+			idx += 2
 
 			if tt.opts.SSHPubKey == "" {
 				return
