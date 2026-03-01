@@ -5,6 +5,28 @@ import (
 	"testing"
 )
 
+func TestZmxCmd(t *testing.T) {
+	got := zmxCmd("zmx list")
+	want := "unset XDG_RUNTIME_DIR && zmx list"
+	if got != want {
+		t.Errorf("zmxCmd(\"zmx list\") = %q, want %q", got, want)
+	}
+}
+
+func TestRunnerConn(t *testing.T) {
+	r := Runner{Host: "10.0.0.1", User: "root", KeyPath: "/tmp/key"}
+	cc := r.conn()
+	if cc.Host != "10.0.0.1" {
+		t.Errorf("Host = %q, want %q", cc.Host, "10.0.0.1")
+	}
+	if cc.User != "root" {
+		t.Errorf("User = %q, want %q", cc.User, "root")
+	}
+	if cc.KeyPath != "/tmp/key" {
+		t.Errorf("KeyPath = %q, want %q", cc.KeyPath, "/tmp/key")
+	}
+}
+
 func TestSteps(t *testing.T) {
 	tests := []struct {
 		name      string
