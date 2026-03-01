@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/briandowns/spinner"
@@ -12,18 +13,30 @@ import (
 	"github.com/deevus/pixels/internal/ssh"
 )
 
+var validSessionName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+
 func init() {
-	rootCmd.AddCommand(&cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "console <name>",
 		Short: "Open an interactive SSH session",
 		Args:  cobra.ExactArgs(1),
 		RunE:  runConsole,
-	})
+	}
+	cmd.Flags().StringP("session", "s", "console", "zmx session name")
+	cmd.Flags().Bool("no-persist", false, "skip zmx, use plain SSH")
+	rootCmd.AddCommand(cmd)
 }
 
 func runConsole(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	name := args[0]
+
+	session, _ := cmd.Flags().GetString("session")
+	noPersist, _ := cmd.Flags().GetBool("no-persist")
+
+	if !noPersist && !validSessionName.MatchString(session) {
+		return fmt.Errorf("invalid session name %q: must match [a-zA-Z0-9._-]", session)
+	}
 
 	// Try local cache first for fast path (already running).
 	var ip string
@@ -93,6 +106,21 @@ func runConsole(cmd *cobra.Command, args []string) error {
 		spin.Stop()
 	}
 
+	cc := ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key, Env: cfg.EnvForward}
+
+	// Determine remote command for zmx session persistence.
+	var remoteCmd string
+	if !noPersist {
+		// Check if zmx is available in the container (without env forwarding).
+		checkCC := ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key}
+		code, err := ssh.ExecQuiet(ctx, checkCC, []string{"command -v zmx >/dev/null 2>&1"})
+		if err == nil && code == 0 {
+			remoteCmd = "unset XDG_RUNTIME_DIR && zmx attach " + session
+		} else {
+			logv(cmd, "zmx not available, falling back to plain SSH")
+		}
+	}
+
 	// Console replaces the process — does not return on success.
-	return ssh.Console(ip, cfg.SSH.User, cfg.SSH.Key, cfg.EnvForward)
+	return ssh.Console(cc, remoteCmd)
 }

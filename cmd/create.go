@@ -319,7 +319,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			logv(cmd, "Provision: %s", status)
 		})
 		stopSpinner()
-		return ssh.Console(ip, cfg.SSH.User, cfg.SSH.Key, cfg.EnvForward)
+		return ssh.Console(ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key, Env: cfg.EnvForward}, "")
 	}
 
 	return nil

@@ -93,7 +93,7 @@ func resolveNetworkContext(cmd *cobra.Command, name string) (*networkContext, er
 
 // sshAsRoot runs a command on the container as root via SSH.
 func sshAsRoot(cmd *cobra.Command, ip string, command []string) (int, error) {
-	return ssh.Exec(cmd.Context(), ip, "root", cfg.SSH.Key, command, nil)
+	return ssh.Exec(cmd.Context(), ssh.ConnConfig{Host: ip, User: "root", KeyPath: cfg.SSH.Key}, command)
 }
 
 func runNetworkShow(cmd *cobra.Command, args []string) error {
@@ -199,7 +199,7 @@ func runNetworkAllow(cmd *cobra.Command, args []string) error {
 	}
 
 	// Read current domains via SSH.
-	out, err := ssh.Output(ctx, nc.ip, "root", cfg.SSH.Key, []string{"cat", "/etc/pixels-egress-domains"})
+	out, err := ssh.Output(ctx, ssh.ConnConfig{Host: nc.ip, User: "root", KeyPath: cfg.SSH.Key}, []string{"cat", "/etc/pixels-egress-domains"})
 	if err != nil {
 		return fmt.Errorf("reading domains file: %w", err)
 	}
@@ -244,7 +244,7 @@ func runNetworkDeny(cmd *cobra.Command, args []string) error {
 	cname := containerName(name)
 
 	// Read current domains via SSH.
-	out, err := ssh.Output(ctx, nc.ip, "root", cfg.SSH.Key, []string{"cat", "/etc/pixels-egress-domains"})
+	out, err := ssh.Output(ctx, ssh.ConnConfig{Host: nc.ip, User: "root", KeyPath: cfg.SSH.Key}, []string{"cat", "/etc/pixels-egress-domains"})
 	if err != nil {
 		return fmt.Errorf("no egress policy configured on %s", name)
 	}

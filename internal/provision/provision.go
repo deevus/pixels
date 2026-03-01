@@ -41,6 +41,10 @@ func (r *Runner) logf(format string, a ...any) {
 	}
 }
 
+func (r *Runner) conn() ssh.ConnConfig {
+	return ssh.ConnConfig{Host: r.Host, User: r.User, KeyPath: r.KeyPath}
+}
+
 // zmxCmd wraps a zmx command to clear XDG_RUNTIME_DIR. SSH sessions
 // set it to /run/user/0 via PAM, but the provision script runs without
 // it, so zmx defaults to /tmp/zmx-<uid>. Clearing it here ensures the
@@ -54,7 +58,7 @@ func (r *Runner) InstallZmx(ctx context.Context) error {
 	url := fmt.Sprintf("https://zmx.sh/a/zmx-%s-linux-x86_64.tar.gz", zmxVersion)
 	script := fmt.Sprintf("curl -fsSL %s | tar xz -C /usr/local/bin/", url)
 	r.logf("Installing zmx %s...", zmxVersion)
-	code, err := ssh.ExecQuiet(ctx, r.Host, r.User, r.KeyPath, []string{script})
+	code, err := ssh.ExecQuiet(ctx, r.conn(), []string{script})
 	if err != nil {
 		return fmt.Errorf("installing zmx: %w", err)
 	}
@@ -72,7 +76,7 @@ func (r *Runner) Run(ctx context.Context, step Step) error {
 	// Redirect stdout/stderr so SSH doesn't wait for the background zmx
 	// session to finish (it inherits the FDs from zmx run).
 	cmd := zmxCmd(fmt.Sprintf("zmx run %s %s >/dev/null 2>&1", step.Name, step.Script))
-	code, err := ssh.ExecQuiet(ctx, r.Host, r.User, r.KeyPath, []string{cmd})
+	code, err := ssh.ExecQuiet(ctx, r.conn(), []string{cmd})
 	if err != nil {
 		return fmt.Errorf("starting %s: %w", step.Name, err)
 	}
@@ -85,7 +89,7 @@ func (r *Runner) Run(ctx context.Context, step Step) error {
 // Wait blocks until all named zmx sessions complete.
 func (r *Runner) Wait(ctx context.Context, names ...string) error {
 	cmd := zmxCmd("zmx wait " + strings.Join(names, " "))
-	code, err := ssh.ExecQuiet(ctx, r.Host, r.User, r.KeyPath, []string{cmd})
+	code, err := ssh.ExecQuiet(ctx, r.conn(), []string{cmd})
 	if err != nil {
 		return fmt.Errorf("waiting for steps: %w", err)
 	}
@@ -98,7 +102,7 @@ func (r *Runner) Wait(ctx context.Context, names ...string) error {
 // List runs zmx list and returns the raw output. The caller can display
 // this directly or parse it for structured status information.
 func (r *Runner) List(ctx context.Context) (string, error) {
-	out, err := ssh.OutputQuiet(ctx, r.Host, r.User, r.KeyPath, []string{zmxCmd("zmx list")})
+	out, err := ssh.OutputQuiet(ctx, r.conn(), []string{zmxCmd("zmx list")})
 	if err != nil {
 		return "", fmt.Errorf("listing zmx sessions: %w", err)
 	}
@@ -107,7 +111,7 @@ func (r *Runner) List(ctx context.Context) (string, error) {
 
 // History returns the scrollback output of a completed zmx session.
 func (r *Runner) History(ctx context.Context, name string) (string, error) {
-	out, err := ssh.OutputQuiet(ctx, r.Host, r.User, r.KeyPath, []string{zmxCmd("zmx history " + name)})
+	out, err := ssh.OutputQuiet(ctx, r.conn(), []string{zmxCmd("zmx history " + name)})
 	if err != nil {
 		return "", fmt.Errorf("getting history for %s: %w", name, err)
 	}
@@ -116,13 +120,13 @@ func (r *Runner) History(ctx context.Context, name string) (string, error) {
 
 // IsProvisioned checks if the provision sentinel file exists.
 func (r *Runner) IsProvisioned(ctx context.Context) bool {
-	code, err := ssh.ExecQuiet(ctx, r.Host, r.User, r.KeyPath, []string{"test -f /root/.pixels-provisioned"})
+	code, err := ssh.ExecQuiet(ctx, r.conn(), []string{"test -f /root/.pixels-provisioned"})
 	return err == nil && code == 0
 }
 
 // HasProvisionScript checks if the provision script was written to the container.
 func (r *Runner) HasProvisionScript(ctx context.Context) bool {
-	code, err := ssh.ExecQuiet(ctx, r.Host, r.User, r.KeyPath, []string{"test -x /usr/local/bin/pixels-provision.sh"})
+	code, err := ssh.ExecQuiet(ctx, r.conn(), []string{"test -x /usr/local/bin/pixels-provision.sh"})
 	return err == nil && code == 0
 }
 
