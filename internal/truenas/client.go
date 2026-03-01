@@ -162,7 +162,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 
 	// Shell alias for detaching zmx sessions.
 	if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/profile.d/pixels.sh", truenas.WriteFileParams{
-		Content: []byte("alias detach='zmx detach'\n"),
+		Content: []byte("alias detach='zmx detach'\n[ -n \"$ZMX_SESSION\" ] && echo \"Detach: Ctrl+\\\\ or type 'detach'\"\n"),
 		Mode:    0o644,
 	}); err != nil {
 		return fmt.Errorf("writing /etc/profile.d/pixels.sh: %w", err)
