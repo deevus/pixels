@@ -10,7 +10,6 @@ import (
 
 	tnapi "github.com/deevus/truenas-go"
 
-	"github.com/deevus/pixels/internal/cache"
 	"github.com/deevus/pixels/internal/provision"
 	"github.com/deevus/pixels/internal/retry"
 	"github.com/deevus/pixels/internal/ssh"
@@ -67,7 +66,7 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 	if opts.Bare {
 		return &sandbox.Instance{
 			Name:      name,
-			Status:    instance.Status,
+			Status:    sandbox.Status(instance.Status),
 			Addresses: collectAddresses(instance.Aliases),
 		}, nil
 	}
@@ -127,11 +126,9 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 		_ = t.ssh.WaitReady(ctx, cc.Host, 90*time.Second, nil)
 	}
 
-	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
-
 	return &sandbox.Instance{
 		Name:      name,
-		Status:    instance.Status,
+		Status:    sandbox.Status(instance.Status),
 		Addresses: collectAddresses(instance.Aliases),
 	}, nil
 }
@@ -158,7 +155,7 @@ func (t *TrueNAS) List(ctx context.Context) ([]sandbox.Instance, error) {
 	for i, inst := range instances {
 		result[i] = sandbox.Instance{
 			Name:      unprefixed(inst.Name),
-			Status:    inst.Status,
+			Status:    sandbox.Status(inst.Status),
 			Addresses: collectAddresses(inst.Aliases),
 		}
 	}
@@ -181,7 +178,6 @@ func (t *TrueNAS) Start(ctx context.Context, name string) error {
 	ip := ipFromAliases(inst.Aliases)
 	if ip != "" {
 		_ = t.ssh.WaitReady(ctx, ip, 30*time.Second, nil)
-		cache.Put(name, &cache.Entry{IP: ip, Status: inst.Status})
 	}
 	return nil
 }
@@ -193,7 +189,6 @@ func (t *TrueNAS) Stop(ctx context.Context, name string) error {
 	}); err != nil {
 		return fmt.Errorf("stopping %s: %w", name, err)
 	}
-	cache.Delete(name)
 	return nil
 }
 
@@ -210,8 +205,6 @@ func (t *TrueNAS) Delete(ctx context.Context, name string) error {
 	}); err != nil {
 		return fmt.Errorf("deleting %s: %w", name, err)
 	}
-
-	cache.Delete(name)
 	return nil
 }
 
@@ -285,8 +278,6 @@ func (t *TrueNAS) RestoreSnapshot(ctx context.Context, name, label string) error
 	}
 
 	ip := ipFromAliases(inst.Aliases)
-	cache.Put(name, &cache.Entry{IP: ip, Status: inst.Status})
-
 	if ip != "" {
 		_ = t.ssh.WaitReady(ctx, ip, 30*time.Second, nil)
 	}
@@ -314,7 +305,7 @@ func (t *TrueNAS) resolveDataset(ctx context.Context, name string) (string, erro
 func toInstance(inst *tnapi.VirtInstance) *sandbox.Instance {
 	return &sandbox.Instance{
 		Name:      unprefixed(inst.Name),
-		Status:    inst.Status,
+		Status:    sandbox.Status(inst.Status),
 		Addresses: collectAddresses(inst.Aliases),
 	}
 }

@@ -51,10 +51,21 @@ type Sandbox interface {
 	NetworkPolicy
 }
 
+// Status represents a container's lifecycle state.
+type Status string
+
+const (
+	StatusRunning Status = "RUNNING"
+	StatusStopped Status = "STOPPED"
+)
+
+// IsRunning reports whether the container is in a running state.
+func (s Status) IsRunning() bool { return s == StatusRunning }
+
 // Instance is the backend-agnostic representation of a container.
 type Instance struct {
 	Name      string
-	Status    string
+	Status    Status
 	Addresses []string
 }
 
@@ -80,6 +91,7 @@ type ExecOpts struct {
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
+	Root   bool // run as root instead of the configured sandbox user
 }
 
 // ConsoleOpts holds parameters for attaching an interactive console.

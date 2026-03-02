@@ -6,8 +6,6 @@ import (
 	"strings"
 
 	tnapi "github.com/deevus/truenas-go"
-
-	"github.com/deevus/pixels/internal/cache"
 )
 
 const containerPrefix = "px-"
@@ -22,14 +20,9 @@ func unprefixed(name string) string {
 	return strings.TrimPrefix(name, containerPrefix)
 }
 
-// resolveRunningIP returns the IP of a running container, checking the local
-// cache first (keyed by bare name) then falling back to the API.
+// resolveRunningIP returns the IP of a running container via the API.
 func (t *TrueNAS) resolveRunningIP(ctx context.Context, name string) (string, error) {
 	full := prefixed(name)
-
-	if cached := cache.Get(name); cached != nil && cached.IP != "" && cached.Status == "RUNNING" {
-		return cached.IP, nil
-	}
 
 	instance, err := t.client.Virt.GetInstance(ctx, full)
 	if err != nil {
@@ -46,7 +39,6 @@ func (t *TrueNAS) resolveRunningIP(ctx context.Context, name string) (string, er
 	if ip == "" {
 		return "", fmt.Errorf("no IP address for %s", name)
 	}
-	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
 	return ip, nil
 }
 

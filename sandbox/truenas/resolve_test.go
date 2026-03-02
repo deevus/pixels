@@ -6,50 +6,18 @@ import (
 	"testing"
 
 	tnapi "github.com/deevus/truenas-go"
-
-	"github.com/deevus/pixels/internal/cache"
 )
 
 func TestResolveRunningIP(t *testing.T) {
 	tests := []struct {
-		name      string
-		cached    *cache.Entry
-		instance  *tnapi.VirtInstance
-		getErr    error
-		wantIP    string
-		wantErr   string
+		name     string
+		instance *tnapi.VirtInstance
+		getErr   error
+		wantIP   string
+		wantErr  string
 	}{
 		{
-			name:   "cache hit",
-			cached: &cache.Entry{IP: "10.0.0.5", Status: "RUNNING"},
-			wantIP: "10.0.0.5",
-		},
-		{
-			name:   "cache miss, no IP cached",
-			cached: &cache.Entry{IP: "", Status: "RUNNING"},
-			instance: &tnapi.VirtInstance{
-				Name:   "px-test",
-				Status: "RUNNING",
-				Aliases: []tnapi.VirtAlias{
-					{Type: "INET", Address: "10.0.0.10"},
-				},
-			},
-			wantIP: "10.0.0.10",
-		},
-		{
-			name:   "cache miss, status not running",
-			cached: &cache.Entry{IP: "10.0.0.5", Status: "STOPPED"},
-			instance: &tnapi.VirtInstance{
-				Name:   "px-test",
-				Status: "RUNNING",
-				Aliases: []tnapi.VirtAlias{
-					{Type: "INET", Address: "10.0.0.10"},
-				},
-			},
-			wantIP: "10.0.0.10",
-		},
-		{
-			name: "no cache, API lookup",
+			name: "API lookup",
 			instance: &tnapi.VirtInstance{
 				Name:   "px-test",
 				Status: "RUNNING",
@@ -88,13 +56,6 @@ func TestResolveRunningIP(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Clean up cache.
-			cache.Delete("test")
-			if tt.cached != nil {
-				cache.Put("test", tt.cached)
-			}
-			defer cache.Delete("test")
-
 			tn := &TrueNAS{
 				client: &Client{
 					Virt: &tnapi.MockVirtService{

@@ -8,7 +8,6 @@ import (
 
 	tnapi "github.com/deevus/truenas-go"
 
-	"github.com/deevus/pixels/internal/cache"
 	"github.com/deevus/pixels/sandbox"
 )
 
@@ -93,7 +92,7 @@ func TestGet(t *testing.T) {
 			if inst.Name != tt.wantName {
 				t.Errorf("name = %q, want %q", inst.Name, tt.wantName)
 			}
-			if inst.Status != "RUNNING" {
+			if inst.Status != sandbox.StatusRunning {
 				t.Errorf("status = %q", inst.Status)
 			}
 			if len(inst.Addresses) != 1 || inst.Addresses[0] != "10.0.0.5" {
@@ -128,7 +127,7 @@ func TestList(t *testing.T) {
 	if instances[1].Name != "beta" {
 		t.Errorf("instances[1].Name = %q, want beta", instances[1].Name)
 	}
-	if instances[0].Status != "RUNNING" {
+	if instances[0].Status != sandbox.StatusRunning {
 		t.Errorf("instances[0].Status = %q", instances[0].Status)
 	}
 }
@@ -175,17 +174,11 @@ func TestDelete(t *testing.T) {
 				},
 			},
 		})
-		cache.Put("test", &cache.Entry{IP: "10.0.0.5", Status: "RUNNING"})
-		defer cache.Delete("test")
-
 		if err := tn.Delete(context.Background(), "test"); err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if !deleteCalled {
 			t.Error("delete not called")
-		}
-		if cached := cache.Get("test"); cached != nil {
-			t.Error("cache should be evicted")
 		}
 	})
 
@@ -337,9 +330,6 @@ func TestResolveDataset(t *testing.T) {
 }
 
 func TestCreateNoProvision(t *testing.T) {
-	cache.Delete("test")
-	defer cache.Delete("test")
-
 	mssh := &mockSSH{}
 	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
@@ -373,24 +363,15 @@ func TestCreateNoProvision(t *testing.T) {
 	if inst.Name != "test" {
 		t.Errorf("name = %q", inst.Name)
 	}
-	if inst.Status != "RUNNING" {
+	if inst.Status != sandbox.StatusRunning {
 		t.Errorf("status = %q", inst.Status)
 	}
 	if len(inst.Addresses) != 1 || inst.Addresses[0] != "10.0.0.42" {
 		t.Errorf("addresses = %v", inst.Addresses)
 	}
-
-	// Verify cached.
-	cached := cache.Get("test")
-	if cached == nil || cached.IP != "10.0.0.42" {
-		t.Errorf("cache = %+v", cached)
-	}
 }
 
 func TestStart(t *testing.T) {
-	cache.Delete("test")
-	defer cache.Delete("test")
-
 	mssh := &mockSSH{}
 	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
@@ -412,11 +393,6 @@ func TestStart(t *testing.T) {
 
 	if err := tn.Start(context.Background(), "test"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-
-	cached := cache.Get("test")
-	if cached == nil || cached.IP != "10.0.0.7" {
-		t.Errorf("cache = %+v", cached)
 	}
 }
 

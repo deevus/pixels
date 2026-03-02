@@ -10,7 +10,6 @@ import (
 
 	tnapi "github.com/deevus/truenas-go"
 
-	"github.com/deevus/pixels/internal/cache"
 	"github.com/deevus/pixels/internal/ssh"
 	"github.com/deevus/pixels/sandbox"
 )
@@ -61,15 +60,24 @@ type writeCall struct {
 	mode    fs.FileMode
 }
 
-func TestSetEgressModeUnrestricted(t *testing.T) {
-	cache.Put("test", &cache.Entry{IP: "10.0.0.5", Status: "RUNNING"})
-	defer cache.Delete("test")
+// runningInstanceFunc returns a GetInstanceFunc that returns a running instance at the given IP.
+func runningInstanceFunc(ip string) func(ctx context.Context, name string) (*tnapi.VirtInstance, error) {
+	return func(ctx context.Context, name string) (*tnapi.VirtInstance, error) {
+		return &tnapi.VirtInstance{
+			Name:    name,
+			Status:  "RUNNING",
+			Aliases: []tnapi.VirtAlias{{Type: "INET", Address: ip}},
+		}, nil
+	}
+}
 
+func TestSetEgressModeUnrestricted(t *testing.T) {
 	var writes []writeCall
 	mssh := &mockSSH{}
 
 	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
+			GetInstanceFunc: runningInstanceFunc("10.0.0.5"),
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Pool: "tank"}, nil
 			},
@@ -121,14 +129,12 @@ func TestSetEgressModeUnrestricted(t *testing.T) {
 }
 
 func TestSetEgressModeAllowlist(t *testing.T) {
-	cache.Put("test", &cache.Entry{IP: "10.0.0.5", Status: "RUNNING"})
-	defer cache.Delete("test")
-
 	var writes []writeCall
 	mssh := &mockSSH{}
 
 	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
+			GetInstanceFunc: runningInstanceFunc("10.0.0.5"),
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Pool: "tank"}, nil
 			},
@@ -191,9 +197,6 @@ func TestSetEgressModeAllowlist(t *testing.T) {
 }
 
 func TestAllowDomain(t *testing.T) {
-	cache.Put("test", &cache.Entry{IP: "10.0.0.5", Status: "RUNNING"})
-	defer cache.Delete("test")
-
 	var lastWritten string
 	mssh := &mockSSH{
 		execFn: func(ctx context.Context, cc ssh.ConnConfig, cmd []string) (int, error) {
@@ -206,6 +209,7 @@ func TestAllowDomain(t *testing.T) {
 
 	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
+			GetInstanceFunc: runningInstanceFunc("10.0.0.5"),
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Pool: "tank"}, nil
 			},
@@ -231,9 +235,6 @@ func TestAllowDomain(t *testing.T) {
 }
 
 func TestAllowDomainDuplicate(t *testing.T) {
-	cache.Put("test", &cache.Entry{IP: "10.0.0.5", Status: "RUNNING"})
-	defer cache.Delete("test")
-
 	mssh := &mockSSH{
 		execFn: func(ctx context.Context, cc ssh.ConnConfig, cmd []string) (int, error) {
 			return 0, nil
@@ -245,6 +246,7 @@ func TestAllowDomainDuplicate(t *testing.T) {
 
 	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
+			GetInstanceFunc: runningInstanceFunc("10.0.0.5"),
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Pool: "tank"}, nil
 			},
@@ -263,9 +265,6 @@ func TestAllowDomainDuplicate(t *testing.T) {
 }
 
 func TestDenyDomain(t *testing.T) {
-	cache.Put("test", &cache.Entry{IP: "10.0.0.5", Status: "RUNNING"})
-	defer cache.Delete("test")
-
 	var lastWritten string
 	mssh := &mockSSH{
 		outputFn: func(ctx context.Context, cc ssh.ConnConfig, cmd []string) ([]byte, error) {
@@ -275,6 +274,7 @@ func TestDenyDomain(t *testing.T) {
 
 	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
+			GetInstanceFunc: runningInstanceFunc("10.0.0.5"),
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Pool: "tank"}, nil
 			},
@@ -303,9 +303,6 @@ func TestDenyDomain(t *testing.T) {
 }
 
 func TestDenyDomainNotFound(t *testing.T) {
-	cache.Put("test", &cache.Entry{IP: "10.0.0.5", Status: "RUNNING"})
-	defer cache.Delete("test")
-
 	mssh := &mockSSH{
 		outputFn: func(ctx context.Context, cc ssh.ConnConfig, cmd []string) ([]byte, error) {
 			return []byte("other.com\n"), nil
@@ -314,6 +311,7 @@ func TestDenyDomainNotFound(t *testing.T) {
 
 	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
+			GetInstanceFunc: runningInstanceFunc("10.0.0.5"),
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Pool: "tank"}, nil
 			},
@@ -332,9 +330,6 @@ func TestDenyDomainNotFound(t *testing.T) {
 
 func TestGetPolicy(t *testing.T) {
 	t.Run("unrestricted", func(t *testing.T) {
-		cache.Put("test", &cache.Entry{IP: "10.0.0.5", Status: "RUNNING"})
-		defer cache.Delete("test")
-
 		mssh := &mockSSH{
 			execFn: func(ctx context.Context, cc ssh.ConnConfig, cmd []string) (int, error) {
 				// test -f returns 1 (file not found).
@@ -343,7 +338,9 @@ func TestGetPolicy(t *testing.T) {
 		}
 
 		tn, _ := NewForTest(&Client{
-			Virt: &tnapi.MockVirtService{},
+			Virt: &tnapi.MockVirtService{
+				GetInstanceFunc: runningInstanceFunc("10.0.0.5"),
+			},
 		}, mssh, testCfg())
 
 		policy, err := tn.GetPolicy(context.Background(), "test")
@@ -356,9 +353,6 @@ func TestGetPolicy(t *testing.T) {
 	})
 
 	t.Run("restricted", func(t *testing.T) {
-		cache.Put("test", &cache.Entry{IP: "10.0.0.5", Status: "RUNNING"})
-		defer cache.Delete("test")
-
 		mssh := &mockSSH{
 			execFn: func(ctx context.Context, cc ssh.ConnConfig, cmd []string) (int, error) {
 				return 0, nil // file exists
@@ -369,7 +363,9 @@ func TestGetPolicy(t *testing.T) {
 		}
 
 		tn, _ := NewForTest(&Client{
-			Virt: &tnapi.MockVirtService{},
+			Virt: &tnapi.MockVirtService{
+				GetInstanceFunc: runningInstanceFunc("10.0.0.5"),
+			},
 		}, mssh, testCfg())
 
 		policy, err := tn.GetPolicy(context.Background(), "test")
