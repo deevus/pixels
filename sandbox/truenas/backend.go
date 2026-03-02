@@ -14,12 +14,12 @@ import (
 	"github.com/deevus/pixels/internal/provision"
 	"github.com/deevus/pixels/internal/retry"
 	"github.com/deevus/pixels/internal/ssh"
-	tnc "github.com/deevus/pixels/internal/truenas"
 	"github.com/deevus/pixels/sandbox"
 )
 
 // Create creates a new container instance with the full provisioning flow:
 // NIC resolution, instance creation, provisioning, restart, IP poll, SSH wait.
+// When opts.Bare is true, only the instance is created (no provisioning or SSH wait).
 func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox.Instance, error) {
 	name := opts.Name
 	full := prefixed(name)
@@ -37,7 +37,7 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 		memory = t.cfg.memory * 1024 * 1024 // MiB → bytes
 	}
 
-	createOpts := tnc.CreateInstanceOpts{
+	createOpts := CreateInstanceOpts{
 		Name:      full,
 		Image:     image,
 		CPU:       cpu,
@@ -47,7 +47,7 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 
 	// Resolve NIC: config override or auto-detect.
 	if t.cfg.nicType != "" {
-		createOpts.NIC = &tnc.NICOpts{
+		createOpts.NIC = &NICOpts{
 			NICType: strings.ToUpper(t.cfg.nicType),
 			Parent:  t.cfg.parent,
 		}
@@ -63,12 +63,21 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 		return nil, fmt.Errorf("creating instance: %w", err)
 	}
 
+	// Bare mode: return immediately without provisioning or waiting.
+	if opts.Bare {
+		return &sandbox.Instance{
+			Name:      name,
+			Status:    instance.Status,
+			Addresses: collectAddresses(instance.Aliases),
+		}, nil
+	}
+
 	// Provision if enabled.
 	if t.cfg.provision {
 		pubKey := readSSHPubKey(t.cfg.sshKey)
 		steps := provision.Steps(t.cfg.egress, t.cfg.devtools)
 
-		provOpts := tnc.ProvisionOpts{
+		provOpts := ProvisionOpts{
 			SSHPubKey:   pubKey,
 			DNS:         t.cfg.dns,
 			Env:         t.cfg.env,

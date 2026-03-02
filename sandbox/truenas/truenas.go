@@ -6,8 +6,6 @@ import (
 	"context"
 
 	"github.com/deevus/pixels/sandbox"
-
-	tnc "github.com/deevus/pixels/internal/truenas"
 )
 
 // Compile-time check that TrueNAS implements sandbox.Sandbox.
@@ -19,10 +17,10 @@ func init() {
 	})
 }
 
-// TrueNAS implements sandbox.Sandbox by wrapping internal/truenas.Client,
-// internal/ssh, internal/cache, and internal/egress.
+// TrueNAS implements sandbox.Sandbox using the TrueNAS WebSocket API for
+// container lifecycle, SSH for execution, and the local cache for fast lookups.
 type TrueNAS struct {
-	client *tnc.Client
+	client *Client
 	cfg    *tnConfig
 	ssh    sshRunner
 }
@@ -34,7 +32,7 @@ func New(cfg map[string]string) (*TrueNAS, error) {
 		return nil, err
 	}
 
-	client, err := tnc.Connect(context.Background(), c.toConfig())
+	client, err := connect(context.Background(), c)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +45,7 @@ func New(cfg map[string]string) (*TrueNAS, error) {
 }
 
 // NewForTest creates a TrueNAS backend with injected dependencies for testing.
-func NewForTest(client *tnc.Client, ssh sshRunner, cfg map[string]string) (*TrueNAS, error) {
+func NewForTest(client *Client, ssh sshRunner, cfg map[string]string) (*TrueNAS, error) {
 	c, err := parseCfg(cfg)
 	if err != nil {
 		return nil, err

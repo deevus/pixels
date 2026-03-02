@@ -46,45 +46,37 @@ func runConsole(cmd *cobra.Command, args []string) error {
 	}
 
 	if ip == "" {
-		client, err := connectClient(ctx)
+		sb, err := openSandbox()
 		if err != nil {
 			return err
 		}
-		defer client.Close()
+		defer sb.Close()
 
-		instance, err := client.Virt.GetInstance(ctx, containerName(name))
+		inst, err := sb.Get(ctx, name)
 		if err != nil {
 			return fmt.Errorf("looking up %s: %w", name, err)
 		}
-		if instance == nil {
-			return fmt.Errorf("pixel %q not found", name)
-		}
 
-		if instance.Status != "RUNNING" {
+		if inst.Status != "RUNNING" {
 			fmt.Fprintf(cmd.ErrOrStderr(), "Starting %s...\n", name)
-			if err := client.Virt.StartInstance(ctx, containerName(name)); err != nil {
+			if err := sb.Start(ctx, name); err != nil {
 				return fmt.Errorf("starting instance: %w", err)
 			}
-			instance, err = client.Virt.GetInstance(ctx, containerName(name))
+			inst, err = sb.Get(ctx, name)
 			if err != nil {
 				return fmt.Errorf("refreshing instance: %w", err)
 			}
 		}
 
-		ip = resolveIP(instance)
-		if ip == "" {
+		if len(inst.Addresses) == 0 {
 			return fmt.Errorf("no IP address for %s", name)
 		}
-		cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
+		ip = inst.Addresses[0]
+		cache.Put(name, &cache.Entry{IP: ip, Status: inst.Status})
 	}
 
 	if err := ssh.WaitReady(ctx, ip, 30*time.Second, nil); err != nil {
 		return fmt.Errorf("waiting for SSH: %w", err)
-	}
-
-	// Verify key auth; if it fails, write this machine's key via TrueNAS.
-	if err := ensureSSHAuth(cmd, ctx, ip, name); err != nil {
-		return err
 	}
 
 	// Wait for provisioning to finish before opening the console.

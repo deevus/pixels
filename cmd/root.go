@@ -57,8 +57,8 @@ func logv(cmd *cobra.Command, format string, a ...any) {
 	}
 }
 
-// openSandbox constructs a Sandbox from the loaded config.
-func openSandbox() (sandbox.Sandbox, error) {
+// sandboxConfig returns the config map for constructing a sandbox.
+func sandboxConfig() map[string]string {
 	m := map[string]string{
 		"host":    cfg.TrueNAS.Host,
 		"api_key": cfg.TrueNAS.APIKey,
@@ -110,7 +110,12 @@ func openSandbox() (sandbox.Sandbox, error) {
 	if len(cfg.Defaults.DNS) > 0 {
 		m["dns"] = strings.Join(cfg.Defaults.DNS, ",")
 	}
-	return sandbox.Open("truenas", m)
+	return m
+}
+
+// openSandbox constructs a Sandbox from the loaded config.
+func openSandbox() (sandbox.Sandbox, error) {
+	return sandbox.Open("truenas", sandboxConfig())
 }
 
 // Execute runs the root command.

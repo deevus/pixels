@@ -9,7 +9,6 @@ import (
 	tnapi "github.com/deevus/truenas-go"
 
 	"github.com/deevus/pixels/internal/cache"
-	tnc "github.com/deevus/pixels/internal/truenas"
 	"github.com/deevus/pixels/sandbox"
 )
 
@@ -23,7 +22,7 @@ func testCfg() map[string]string {
 }
 
 // newTestBackend creates a TrueNAS backend with mock services.
-func newTestBackend(t *testing.T, client *tnc.Client) *TrueNAS {
+func newTestBackend(t *testing.T, client *Client) *TrueNAS {
 	t.Helper()
 	tn, err := NewForTest(client, &mockSSH{}, testCfg())
 	if err != nil {
@@ -64,7 +63,7 @@ func TestGet(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tn := newTestBackend(t, &tnc.Client{
+			tn := newTestBackend(t, &Client{
 				Virt: &tnapi.MockVirtService{
 					GetInstanceFunc: func(ctx context.Context, name string) (*tnapi.VirtInstance, error) {
 						if name != "px-mybox" {
@@ -105,7 +104,7 @@ func TestGet(t *testing.T) {
 }
 
 func TestList(t *testing.T) {
-	tn := newTestBackend(t, &tnc.Client{
+	tn := newTestBackend(t, &Client{
 		Virt: &tnapi.MockVirtService{
 			ListInstancesFunc: func(ctx context.Context, filters [][]any) ([]tnapi.VirtInstance, error) {
 				return []tnapi.VirtInstance{
@@ -136,7 +135,7 @@ func TestList(t *testing.T) {
 
 func TestStop(t *testing.T) {
 	var stopCalled bool
-	tn := newTestBackend(t, &tnc.Client{
+	tn := newTestBackend(t, &Client{
 		Virt: &tnapi.MockVirtService{
 			StopInstanceFunc: func(ctx context.Context, name string, opts tnapi.StopVirtInstanceOpts) error {
 				stopCalled = true
@@ -162,7 +161,7 @@ func TestStop(t *testing.T) {
 func TestDelete(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		var deleteCalled bool
-		tn := newTestBackend(t, &tnc.Client{
+		tn := newTestBackend(t, &Client{
 			Virt: &tnapi.MockVirtService{
 				StopInstanceFunc: func(ctx context.Context, name string, opts tnapi.StopVirtInstanceOpts) error {
 					return nil
@@ -192,7 +191,7 @@ func TestDelete(t *testing.T) {
 
 	t.Run("retry on error", func(t *testing.T) {
 		attempts := 0
-		tn := newTestBackend(t, &tnc.Client{
+		tn := newTestBackend(t, &Client{
 			Virt: &tnapi.MockVirtService{
 				StopInstanceFunc: func(ctx context.Context, name string, opts tnapi.StopVirtInstanceOpts) error {
 					return nil
@@ -218,7 +217,7 @@ func TestDelete(t *testing.T) {
 
 func TestCreateSnapshot(t *testing.T) {
 	var created tnapi.CreateSnapshotOpts
-	tn := newTestBackend(t, &tnc.Client{
+	tn := newTestBackend(t, &Client{
 		Virt: &tnapi.MockVirtService{
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Dataset: "tank/ix-virt"}, nil
@@ -244,7 +243,7 @@ func TestCreateSnapshot(t *testing.T) {
 }
 
 func TestListSnapshots(t *testing.T) {
-	tn := newTestBackend(t, &tnc.Client{
+	tn := newTestBackend(t, &Client{
 		Virt: &tnapi.MockVirtService{
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Dataset: "tank/ix-virt"}, nil
@@ -277,7 +276,7 @@ func TestListSnapshots(t *testing.T) {
 
 func TestDeleteSnapshot(t *testing.T) {
 	var deletedID string
-	tn := newTestBackend(t, &tnc.Client{
+	tn := newTestBackend(t, &Client{
 		Virt: &tnapi.MockVirtService{
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Dataset: "tank/ix-virt"}, nil
@@ -302,7 +301,7 @@ func TestDeleteSnapshot(t *testing.T) {
 
 func TestResolveDataset(t *testing.T) {
 	t.Run("with prefix override", func(t *testing.T) {
-		tn, _ := NewForTest(&tnc.Client{}, &mockSSH{}, map[string]string{
+		tn, _ := NewForTest(&Client{}, &mockSSH{}, map[string]string{
 			"host":           "nas.test",
 			"api_key":        "key",
 			"dataset_prefix": "mypool/virt",
@@ -319,7 +318,7 @@ func TestResolveDataset(t *testing.T) {
 	})
 
 	t.Run("auto-detect from API", func(t *testing.T) {
-		tn := newTestBackend(t, &tnc.Client{
+		tn := newTestBackend(t, &Client{
 			Virt: &tnapi.MockVirtService{
 				GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 					return &tnapi.VirtGlobalConfig{Dataset: "tank/ix-virt"}, nil
@@ -342,7 +341,7 @@ func TestCreateNoProvision(t *testing.T) {
 	defer cache.Delete("test")
 
 	mssh := &mockSSH{}
-	tn, _ := NewForTest(&tnc.Client{
+	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
 			CreateInstanceFunc: func(ctx context.Context, opts tnapi.CreateVirtInstanceOpts) (*tnapi.VirtInstance, error) {
 				return &tnapi.VirtInstance{
@@ -393,7 +392,7 @@ func TestStart(t *testing.T) {
 	defer cache.Delete("test")
 
 	mssh := &mockSSH{}
-	tn, _ := NewForTest(&tnc.Client{
+	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
 			StartInstanceFunc: func(ctx context.Context, name string) error {
 				if name != "px-test" {

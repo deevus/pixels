@@ -12,7 +12,6 @@ import (
 
 	"github.com/deevus/pixels/internal/cache"
 	"github.com/deevus/pixels/internal/ssh"
-	tnc "github.com/deevus/pixels/internal/truenas"
 	"github.com/deevus/pixels/sandbox"
 )
 
@@ -69,7 +68,7 @@ func TestSetEgressModeUnrestricted(t *testing.T) {
 	var writes []writeCall
 	mssh := &mockSSH{}
 
-	tn, _ := NewForTest(&tnc.Client{
+	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Pool: "tank"}, nil
@@ -128,7 +127,7 @@ func TestSetEgressModeAllowlist(t *testing.T) {
 	var writes []writeCall
 	mssh := &mockSSH{}
 
-	tn, _ := NewForTest(&tnc.Client{
+	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Pool: "tank"}, nil
@@ -205,7 +204,7 @@ func TestAllowDomain(t *testing.T) {
 		},
 	}
 
-	tn, _ := NewForTest(&tnc.Client{
+	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Pool: "tank"}, nil
@@ -244,7 +243,7 @@ func TestAllowDomainDuplicate(t *testing.T) {
 		},
 	}
 
-	tn, _ := NewForTest(&tnc.Client{
+	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Pool: "tank"}, nil
@@ -274,7 +273,7 @@ func TestDenyDomain(t *testing.T) {
 		},
 	}
 
-	tn, _ := NewForTest(&tnc.Client{
+	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Pool: "tank"}, nil
@@ -313,7 +312,7 @@ func TestDenyDomainNotFound(t *testing.T) {
 		},
 	}
 
-	tn, _ := NewForTest(&tnc.Client{
+	tn, _ := NewForTest(&Client{
 		Virt: &tnapi.MockVirtService{
 			GetGlobalConfigFunc: func(ctx context.Context) (*tnapi.VirtGlobalConfig, error) {
 				return &tnapi.VirtGlobalConfig{Pool: "tank"}, nil
@@ -343,7 +342,7 @@ func TestGetPolicy(t *testing.T) {
 			},
 		}
 
-		tn, _ := NewForTest(&tnc.Client{
+		tn, _ := NewForTest(&Client{
 			Virt: &tnapi.MockVirtService{},
 		}, mssh, testCfg())
 
@@ -369,7 +368,7 @@ func TestGetPolicy(t *testing.T) {
 			},
 		}
 
-		tn, _ := NewForTest(&tnc.Client{
+		tn, _ := NewForTest(&Client{
 			Virt: &tnapi.MockVirtService{},
 		}, mssh, testCfg())
 

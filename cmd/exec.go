@@ -34,11 +34,6 @@ func runExec(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("waiting for SSH: %w", err)
 	}
 
-	// Verify key auth; if it fails, write this machine's key via TrueNAS.
-	if err := ensureSSHAuth(cmd, ctx, ip, name); err != nil {
-		return err
-	}
-
 	// Wrap in a login shell so ~/.profile is sourced (adds ~/.local/bin to PATH).
 	// Activate mise if installed so tools it manages (claude, node, etc.) are on PATH.
 	// Pass as a single string so SSH's argument concatenation preserves quoting.

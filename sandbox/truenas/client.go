@@ -12,7 +12,6 @@ import (
 	truenas "github.com/deevus/truenas-go"
 	"github.com/deevus/truenas-go/client"
 
-	"github.com/deevus/pixels/internal/config"
 	"github.com/deevus/pixels/internal/egress"
 )
 
@@ -42,21 +41,21 @@ type Client struct {
 	Cron       truenas.CronServiceAPI
 }
 
-// Connect creates and connects a TrueNAS WebSocket client.
-func Connect(ctx context.Context, cfg *config.Config) (*Client, error) {
+// connect creates and connects a TrueNAS WebSocket client from a tnConfig.
+func connect(ctx context.Context, cfg *tnConfig) (*Client, error) {
 	ws, err := client.NewWebSocketClient(client.WebSocketConfig{
-		Host:               cfg.TrueNAS.Host,
-		Port:               cfg.TrueNAS.Port,
-		Username:           cfg.TrueNAS.Username,
-		APIKey:             cfg.TrueNAS.APIKey,
-		InsecureSkipVerify: cfg.TrueNAS.InsecureSkipVerifyValue(),
+		Host:               cfg.host,
+		Port:               cfg.port,
+		Username:           cfg.username,
+		APIKey:             cfg.apiKey,
+		InsecureSkipVerify: cfg.insecure,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("creating client: %w", err)
 	}
 
 	if err := ws.Connect(ctx); err != nil {
-		return nil, fmt.Errorf("connecting to %s: %w", cfg.TrueNAS.Host, err)
+		return nil, fmt.Errorf("connecting to %s: %w", cfg.host, err)
 	}
 
 	v := ws.Version()
@@ -192,9 +191,6 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 	}
 
 	// Write authorized_keys for both root and pixel user.
-	// Writing to pixel's home now (via file_receive) ensures the key is
-	// available immediately, before rc.local creates the user and chowns it.
-	// Pixel user is created with UID/GID 1000 by rc.local.
 	if opts.SSHPubKey != "" {
 		keyData := []byte(opts.SSHPubKey + "\n")
 		if err := c.Filesystem.WriteFile(ctx, rootfs+"/root/.ssh/authorized_keys", truenas.WriteFileParams{
@@ -297,8 +293,6 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 
 	// Write rc.local — systemd-rc-local-generator automatically creates and
 	// starts rc-local.service if /etc/rc.local exists and is executable.
-	// rc.local handles SSH bootstrap and launches the provision script (if present)
-	// via nohup for fire-and-forget provisioning.
 	if opts.SSHPubKey != "" {
 		if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/rc.local", truenas.WriteFileParams{
 			Content: []byte(rcLocalScript),
@@ -320,17 +314,13 @@ type NICOpts struct {
 }
 
 // DefaultNIC discovers the host's gateway interface and returns NIC options
-// suitable for container creation. It queries TrueNAS for the default IPv4
-// gateway, then finds the physical interface whose subnet contains that
-// gateway. Falls back to the first physical interface that is UP with an
-// IPv4 address.
+// suitable for container creation.
 func (c *Client) DefaultNIC(ctx context.Context) (*NICOpts, error) {
 	ifaces, err := c.Interface.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("listing interfaces: %w", err)
 	}
 
-	// Filter to physical interfaces that are UP with an IPv4 address.
 	type candidate struct {
 		name    string
 		address string
@@ -360,7 +350,6 @@ func (c *Client) DefaultNIC(ctx context.Context) (*NICOpts, error) {
 		return nil, fmt.Errorf("no physical interface with IPv4 found")
 	}
 
-	// Try to match the default gateway to an interface subnet.
 	if gw := c.defaultGateway(ctx); gw != nil {
 		for _, cand := range candidates {
 			ip := net.ParseIP(cand.address)
@@ -375,12 +364,9 @@ func (c *Client) DefaultNIC(ctx context.Context) (*NICOpts, error) {
 		}
 	}
 
-	// Fallback: first candidate.
 	return &NICOpts{NICType: "MACVLAN", Parent: candidates[0].name}, nil
 }
 
-// defaultGateway queries network.general.summary for the default IPv4 gateway.
-// Returns nil if the gateway cannot be determined.
 func (c *Client) defaultGateway(ctx context.Context) net.IP {
 	summary, err := c.Network.GetSummary(ctx)
 	if err != nil {
@@ -401,7 +387,7 @@ type CreateInstanceOpts struct {
 	CPU       string
 	Memory    int64 // bytes
 	Autostart bool
-	NIC *NICOpts
+	NIC       *NICOpts
 }
 
 // CreateInstance creates an Incus container via the Virt service.
@@ -441,9 +427,6 @@ func (c *Client) SnapshotRollback(ctx context.Context, snapshotID string) error 
 
 // ReplaceContainerRootfs destroys the container's ZFS dataset and clones
 // the checkpoint snapshot in its place. The container must be stopped.
-//
-// The pool.dataset.* APIs can't see .ix-virt managed datasets, so we use
-// a temporary cron job to run raw ZFS commands on the host as root.
 func (c *Client) ReplaceContainerRootfs(ctx context.Context, containerName, snapshotID string) error {
 	gcfg, err := c.Virt.GetGlobalConfig(ctx)
 	if err != nil {
@@ -454,7 +437,6 @@ func (c *Client) ReplaceContainerRootfs(ctx context.Context, containerName, snap
 	}
 	dstDataset := gcfg.Dataset + "/containers/" + containerName
 
-	// Validate paths contain only safe characters (alphanumeric, .-_/@).
 	for _, p := range []string{dstDataset, snapshotID} {
 		for _, ch := range p {
 			if !isZFSPathChar(ch) {
@@ -471,7 +453,6 @@ func (c *Client) ReplaceContainerRootfs(ctx context.Context, containerName, snap
 		dstDataset, snapshotID, dstDataset, dstDataset, containerName,
 	)
 
-	// Create a disabled cron job — we run it manually, then delete it.
 	job, err := c.Cron.Create(ctx, truenas.CreateCronJobOpts{
 		Command:     cmd,
 		User:        "root",
@@ -489,12 +470,10 @@ func (c *Client) ReplaceContainerRootfs(ctx context.Context, containerName, snap
 		return fmt.Errorf("creating temp cron job: %w", err)
 	}
 
-	// Always clean up the cron job, even if run fails.
 	defer func() {
 		_ = c.Cron.Delete(ctx, job.ID)
 	}()
 
-	// Run the cron job and wait for completion.
 	if err := c.Cron.Run(ctx, job.ID, false); err != nil {
 		return fmt.Errorf("running ZFS clone: %w", err)
 	}
@@ -536,7 +515,6 @@ func (c *Client) WriteAuthorizedKey(ctx context.Context, name, sshPubKey string)
 	return nil
 }
 
-// isZFSPathChar returns true if the rune is valid in a ZFS dataset/snapshot path.
 func isZFSPathChar(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
 		r == '/' || r == '-' || r == '_' || r == '.' || r == '@'

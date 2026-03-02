@@ -70,6 +70,7 @@ type CreateOpts struct {
 	Image  string
 	CPU    string
 	Memory int64
+	Bare   bool // create instance only, skip provisioning and SSH wait
 }
 
 // ExecOpts holds parameters for running a command inside a sandbox.

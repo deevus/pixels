@@ -8,7 +8,6 @@ import (
 	tnapi "github.com/deevus/truenas-go"
 
 	"github.com/deevus/pixels/internal/cache"
-	tnc "github.com/deevus/pixels/internal/truenas"
 )
 
 func TestResolveRunningIP(t *testing.T) {
@@ -97,7 +96,7 @@ func TestResolveRunningIP(t *testing.T) {
 			defer cache.Delete("test")
 
 			tn := &TrueNAS{
-				client: &tnc.Client{
+				client: &Client{
 					Virt: &tnapi.MockVirtService{
 						GetInstanceFunc: func(ctx context.Context, name string) (*tnapi.VirtInstance, error) {
 							if name != "px-test" {

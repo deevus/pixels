@@ -207,7 +207,8 @@ func TestContainerDataset(t *testing.T) {
 	}
 }
 
-type writeCall struct {
+// fsWriteCall records a filesystem WriteFile call for client-level tests.
+type fsWriteCall struct {
 	path    string
 	content string
 	mode    uint32
@@ -225,7 +226,7 @@ func TestProvision(t *testing.T) {
 		wantCalls  int
 		wantErr    bool
 		wantErrMsg string
-		check      func(t *testing.T, calls []writeCall)
+		check      func(t *testing.T, calls []fsWriteCall)
 	}{
 		{
 			name: "full provisioning with ssh, dns, env, devtools",
@@ -237,8 +238,8 @@ func TestProvision(t *testing.T) {
 			},
 			pool:      "tank",
 			wantCalls: 8, // dns + sshd config + profile.d + env + root key + pixel key + setup script + rc.local
-			check: func(t *testing.T, calls []writeCall) {
-				paths := make(map[string]writeCall)
+			check: func(t *testing.T, calls []fsWriteCall) {
+				paths := make(map[string]fsWriteCall)
 				for _, c := range calls {
 					paths[c.path] = c
 				}
@@ -286,7 +287,7 @@ func TestProvision(t *testing.T) {
 			},
 			pool:      "tank",
 			wantCalls: 6, // sshd config + dns + profile.d + root key + pixel key + rc.local
-			check: func(t *testing.T, calls []writeCall) {
+			check: func(t *testing.T, calls []fsWriteCall) {
 				// No devtools files should be written.
 				for _, c := range calls {
 					if strings.Contains(c.path, "pixels-setup-devtools") || strings.Contains(c.path, "pixels-devtools.service") {
@@ -316,7 +317,7 @@ func TestProvision(t *testing.T) {
 			},
 			pool:      "tank",
 			wantCalls: 3, // sshd config + profile.d + /etc/environment
-			check: func(t *testing.T, calls []writeCall) {
+			check: func(t *testing.T, calls []fsWriteCall) {
 				if !strings.Contains(calls[2].path, "/etc/environment") {
 					t.Errorf("expected /etc/environment, got %s", calls[2].path)
 				}
@@ -364,8 +365,8 @@ func TestProvision(t *testing.T) {
 			},
 			pool:      "tank",
 			wantCalls: 13, // sshd config + profile.d + root key + pixel key + domains + cidrs + nftables.conf + resolve script + safe-apt + sudoers.restricted + setup-egress + enable-egress + rc.local
-			check: func(t *testing.T, calls []writeCall) {
-				paths := make(map[string]writeCall)
+			check: func(t *testing.T, calls []fsWriteCall) {
+				paths := make(map[string]fsWriteCall)
 				for _, c := range calls {
 					paths[c.path] = c
 				}
@@ -433,8 +434,8 @@ func TestProvision(t *testing.T) {
 			},
 			pool:      "tank",
 			wantCalls: 6, // sshd config + profile.d + root key + pixel key + provision script + rc.local
-			check: func(t *testing.T, calls []writeCall) {
-				paths := make(map[string]writeCall)
+			check: func(t *testing.T, calls []fsWriteCall) {
+				paths := make(map[string]fsWriteCall)
 				for _, c := range calls {
 					paths[c.path] = c
 				}
@@ -466,7 +467,7 @@ func TestProvision(t *testing.T) {
 			},
 			pool:      "tank",
 			wantCalls: 5, // sshd config + profile.d + root key + pixel key + rc.local (no egress files)
-			check: func(t *testing.T, calls []writeCall) {
+			check: func(t *testing.T, calls []fsWriteCall) {
 				for _, c := range calls {
 					if strings.Contains(c.path, "pixels-egress") || strings.Contains(c.path, "nftables") {
 						t.Errorf("unexpected egress file in unrestricted mode: %s", c.path)
@@ -483,7 +484,7 @@ func TestProvision(t *testing.T) {
 			},
 			pool:      "tank",
 			wantCalls: 12, // sshd config + profile.d + root key + pixel key + domains + nftables.conf + resolve script + safe-apt + sudoers + setup-egress + enable-egress + rc.local
-			check: func(t *testing.T, calls []writeCall) {
+			check: func(t *testing.T, calls []fsWriteCall) {
 				rootfs := "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs"
 				for _, c := range calls {
 					if c.path == rootfs+"/etc/pixels-egress-domains" {
@@ -503,7 +504,7 @@ func TestProvision(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var calls []writeCall
+			var calls []fsWriteCall
 
 			c := &Client{
 				Virt: &truenas.MockVirtService{
@@ -519,7 +520,7 @@ func TestProvision(t *testing.T) {
 						if tt.writeErr != nil {
 							return tt.writeErr
 						}
-						calls = append(calls, writeCall{
+						calls = append(calls, fsWriteCall{
 							path:    path,
 							content: string(params.Content),
 							mode:    uint32(params.Mode),
@@ -752,7 +753,7 @@ func TestSnapshotRollback(t *testing.T) {
 	}
 }
 
-func TestListSnapshots(t *testing.T) {
+func TestListSnapshots_Client(t *testing.T) {
 	var calledFilters [][]any
 	c := &Client{
 		Snapshot: &truenas.MockSnapshotService{
@@ -1002,14 +1003,14 @@ func TestWriteAuthorizedKey(t *testing.T) {
 		wantErr    bool
 		wantErrMsg string
 		wantCalls  int
-		check      func(t *testing.T, calls []writeCall)
+		check      func(t *testing.T, calls []fsWriteCall)
 	}{
 		{
 			name:      "writes key to both root and pixel authorized_keys",
 			pool:      "tank",
 			pubKey:    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest user@newmachine",
 			wantCalls: 2,
-			check: func(t *testing.T, calls []writeCall) {
+			check: func(t *testing.T, calls []fsWriteCall) {
 				rootfs := "/var/lib/incus/storage-pools/tank/containers/px-test/rootfs"
 
 				root := calls[0]
@@ -1059,7 +1060,7 @@ func TestWriteAuthorizedKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var calls []writeCall
+			var calls []fsWriteCall
 
 			c := &Client{
 				Virt: &truenas.MockVirtService{
@@ -1075,7 +1076,7 @@ func TestWriteAuthorizedKey(t *testing.T) {
 						if tt.writeErr != nil {
 							return tt.writeErr
 						}
-						calls = append(calls, writeCall{
+						calls = append(calls, fsWriteCall{
 							path:    path,
 							content: string(params.Content),
 							mode:    uint32(params.Mode),

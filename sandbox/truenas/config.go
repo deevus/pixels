@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"github.com/deevus/pixels/internal/config"
 )
 
 // tnConfig holds parsed backend configuration.
@@ -41,8 +39,7 @@ type tnConfig struct {
 	envForward map[string]string
 }
 
-// parseCfg extracts a tnConfig from a flat key-value map, applying the same
-// defaults as internal/config.
+// parseCfg extracts a tnConfig from a flat key-value map.
 func parseCfg(m map[string]string) (*tnConfig, error) {
 	c := &tnConfig{
 		username:  "root",
@@ -156,33 +153,6 @@ func parseCfg(m map[string]string) (*tnConfig, error) {
 	c.sshKey = expandHome(c.sshKey)
 
 	return c, nil
-}
-
-// toConfig converts a tnConfig to the internal config.Config used by
-// truenas.Connect.
-func (c *tnConfig) toConfig() *config.Config {
-	cfg := &config.Config{
-		TrueNAS: config.TrueNAS{
-			Host:     c.host,
-			Port:     c.port,
-			Username: c.username,
-			APIKey:   c.apiKey,
-		},
-		Defaults: config.Defaults{
-			Image:  c.image,
-			CPU:    c.cpu,
-			Memory: c.memory,
-			Pool:   c.pool,
-		},
-		SSH: config.SSH{
-			User: c.sshUser,
-			Key:  c.sshKey,
-		},
-	}
-	if c.insecure {
-		cfg.TrueNAS.InsecureSkipVerify = boolPtr(true)
-	}
-	return cfg
 }
 
 func expandHome(path string) string {
