@@ -16,7 +16,6 @@ import (
 
 	incusclient "github.com/lxc/incus/v6/client"
 
-	"github.com/deevus/pixels/internal/cache"
 	"github.com/deevus/pixels/internal/retry"
 	"github.com/deevus/pixels/sandbox"
 )
@@ -29,10 +28,16 @@ func (i *Incus) Run(ctx context.Context, name string, opts sandbox.ExecOpts) (in
 
 	interactive := opts.Stdin != nil
 	execPost := api.InstanceExecPost{
-		Command:     opts.Cmd,
+		Command:     shellWrap(opts.Cmd),
 		WaitForWS:   true,
 		Interactive: interactive,
 		Environment: env,
+	}
+
+	if !opts.Root && i.cfg.uid != 0 {
+		execPost.User = i.cfg.uid
+		execPost.Group = i.cfg.gid
+		i.applyUserEnv(&execPost)
 	}
 
 	if interactive {
@@ -82,6 +87,8 @@ func (i *Incus) Run(ctx context.Context, name string, opts sandbox.ExecOpts) (in
 // Output executes a command and returns its stdout.
 func (i *Incus) Output(ctx context.Context, name string, cmd []string) ([]byte, error) {
 	full := prefixed(name)
+
+	cmd = shellWrap(cmd)
 
 	var stdout bytes.Buffer
 	dataDone := make(chan bool)
@@ -143,6 +150,12 @@ func (i *Incus) Console(ctx context.Context, name string, opts sandbox.ConsoleOp
 		Environment: env,
 		Width:       width,
 		Height:      height,
+	}
+
+	if i.cfg.uid != 0 {
+		execPost.User = i.cfg.uid
+		execPost.Group = i.cfg.gid
+		i.applyUserEnv(&execPost)
 	}
 
 	// Set terminal to raw mode.
@@ -215,11 +228,6 @@ func (i *Incus) Ready(ctx context.Context, name string, timeout time.Duration) e
 		if state.StatusCode != api.Running {
 			return false, nil
 		}
-		// Check for network addresses (indicates agent is responsive).
-		addrs := extractIPv4(state)
-		if len(addrs) > 0 {
-			cache.Put(name, &cache.Entry{IP: addrs[0], Status: "RUNNING"})
-		}
 		return state.Pid > 0, nil
 	})
 	if err != nil {
@@ -237,6 +245,38 @@ func exitCodeFromOp(op incusclient.Operation) int {
 		}
 	}
 	return 0
+}
+
+// applyUserEnv sets login environment variables and working directory on an
+// exec post when running as the configured non-root user. This mirrors what
+// SSH does automatically — Incus exec with --user only sets the uid/gid.
+func (i *Incus) applyUserEnv(p *api.InstanceExecPost) {
+	home := fmt.Sprintf("/home/%s", i.cfg.sshUser)
+	if p.Environment == nil {
+		p.Environment = make(map[string]string)
+	}
+	if _, ok := p.Environment["HOME"]; !ok {
+		p.Environment["HOME"] = home
+	}
+	if _, ok := p.Environment["USER"]; !ok {
+		p.Environment["USER"] = i.cfg.sshUser
+	}
+	if _, ok := p.Environment["SHELL"]; !ok {
+		p.Environment["SHELL"] = "/bin/bash"
+	}
+	if p.Cwd == "" {
+		p.Cwd = home
+	}
+}
+
+// shellWrap ensures a command is a proper argv for Incus exec, which doesn't
+// use a shell. Single-string shell expressions (e.g. "test -f /path") are
+// wrapped in sh -c so the shell interprets them.
+func shellWrap(cmd []string) []string {
+	if len(cmd) == 1 && strings.Contains(cmd[0], " ") {
+		return []string{"sh", "-c", cmd[0]}
+	}
+	return cmd
 }
 
 // envSliceToMap converts a slice of "KEY=VALUE" pairs to a map.

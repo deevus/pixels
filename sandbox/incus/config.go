@@ -17,10 +17,11 @@ type incusCfg struct {
 	serverCert string
 	project    string
 
-	image  string
-	cpu    string
-	memory int64 // MiB
-	pool   string
+	image       string
+	imageServer string
+	cpu         string
+	memory      int64 // MiB
+	pool        string
 
 	nicType string
 	parent  string
@@ -28,6 +29,8 @@ type incusCfg struct {
 
 	sshUser string
 	sshKey  string
+	uid     uint32
+	gid     uint32
 
 	provision bool
 	devtools  bool
@@ -42,15 +45,18 @@ type incusCfg struct {
 // parseCfg extracts an incusCfg from a flat key-value map.
 func parseCfg(m map[string]string) (*incusCfg, error) {
 	c := &incusCfg{
-		image:     "ubuntu/24.04",
-		cpu:       "2",
-		memory:    2048,
-		pool:      "default",
-		sshUser:   "pixel",
-		sshKey:    "~/.ssh/id_ed25519",
-		provision: true,
-		devtools:  true,
-		egress:    "unrestricted",
+		image:       "ubuntu/24.04",
+		imageServer: "https://images.linuxcontainers.org",
+		cpu:         "2",
+		memory:      2048,
+		pool:        "default",
+		sshUser:     "pixel",
+		sshKey:      "~/.ssh/id_ed25519",
+		uid:         1000,
+		gid:         1000,
+		provision:   true,
+		devtools:    true,
+		egress:      "unrestricted",
 	}
 
 	if v := m["socket"]; v != "" {
@@ -74,6 +80,9 @@ func parseCfg(m map[string]string) (*incusCfg, error) {
 
 	if v := m["image"]; v != "" {
 		c.image = v
+	}
+	if v := m["image_server"]; v != "" {
+		c.imageServer = v
 	}
 	if v := m["cpu"]; v != "" {
 		c.cpu = v
