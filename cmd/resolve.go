@@ -83,6 +83,15 @@ func lookupRunningIP(ctx context.Context, virt truenas.VirtServiceAPI, name stri
 	return ip, nil
 }
 
+// resolveDatasetPath returns the ZFS dataset path for a container.
+// Priority: config override > auto-detect from virt.global.config.
+func resolveDatasetPath(ctx context.Context, client *tnc.Client, name string) (string, error) {
+	if cfg.Checkpoint.DatasetPrefix != "" {
+		return cfg.Checkpoint.DatasetPrefix + "/" + containerName(name), nil
+	}
+	return client.ContainerDataset(ctx, containerName(name))
+}
+
 func newTabWriter(cmd *cobra.Command) *tabwriter.Writer {
 	return tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 }

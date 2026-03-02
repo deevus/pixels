@@ -2,12 +2,8 @@ package cmd
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/deevus/pixels/internal/cache"
-	"github.com/deevus/pixels/internal/ssh"
 )
 
 func init() {
@@ -20,34 +16,29 @@ func init() {
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
-	ctx := cmd.Context()
 	name := args[0]
 
-	client, err := connectClient(ctx)
+	sb, err := openSandbox()
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer sb.Close()
 
-	if err := client.Virt.StartInstance(ctx, containerName(name)); err != nil {
-		return fmt.Errorf("starting %s: %w", name, err)
+	if err := sb.Start(cmd.Context(), name); err != nil {
+		return err
 	}
 
-	// Re-fetch to get the IP.
-	instance, err := client.Virt.GetInstance(ctx, containerName(name))
+	inst, err := sb.Get(cmd.Context(), name)
 	if err != nil {
-		return fmt.Errorf("refreshing %s: %w", name, err)
+		// Start succeeded but Get failed — still report success.
+		fmt.Fprintf(cmd.OutOrStdout(), "Started %s\n", name)
+		return nil
 	}
 
-	ip := resolveIP(instance)
-	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
-	if ip != "" {
-		if err := ssh.WaitReady(ctx, ip, 30*time.Second, nil); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: SSH not ready: %v\n", err)
-		}
+	if len(inst.Addresses) > 0 {
 		fmt.Fprintf(cmd.OutOrStdout(), "Started %s\n", name)
-		fmt.Fprintf(cmd.OutOrStdout(), "  IP:  %s\n", ip)
-		fmt.Fprintf(cmd.OutOrStdout(), "  SSH: ssh %s@%s\n", cfg.SSH.User, ip)
+		fmt.Fprintf(cmd.OutOrStdout(), "  IP:  %s\n", inst.Addresses[0])
+		fmt.Fprintf(cmd.OutOrStdout(), "  SSH: ssh %s@%s\n", cfg.SSH.User, inst.Addresses[0])
 	} else {
 		fmt.Fprintf(cmd.OutOrStdout(), "Started %s (no IP assigned)\n", name)
 	}
