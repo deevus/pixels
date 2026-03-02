@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"al.essio.dev/pkg/shellescape"
 	"github.com/spf13/cobra"
 
 	"github.com/deevus/pixels/internal/ssh"
@@ -38,7 +39,12 @@ func runExec(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	exitCode, err := ssh.Exec(ctx, ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key, Env: cfg.EnvForward}, command)
+	// Wrap in a login shell so ~/.profile is sourced (adds ~/.local/bin to PATH).
+	// Activate mise if installed so tools it manages (claude, node, etc.) are on PATH.
+	// Pass as a single string so SSH's argument concatenation preserves quoting.
+	inner := shellescape.QuoteCommand(command)
+	loginCmd := []string{"bash -lc " + shellescape.Quote("eval \"$(mise activate bash 2>/dev/null)\"; "+inner)}
+	exitCode, err := ssh.Exec(ctx, ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key, Env: cfg.EnvForward}, loginCmd)
 	if err != nil {
 		return err
 	}

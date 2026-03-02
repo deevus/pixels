@@ -3,7 +3,9 @@ module github.com/deevus/pixels
 go 1.25.0
 
 require (
+	al.essio.dev/pkg/shellescape v1.6.0
 	github.com/BurntSushi/toml v1.6.0
+	github.com/briandowns/spinner v1.23.2
 	github.com/caarlos0/env/v11 v11.4.0
 	github.com/deevus/truenas-go v0.4.0
 	github.com/dustin/go-humanize v1.0.1
@@ -11,8 +13,6 @@ require (
 )
 
 require (
-	al.essio.dev/pkg/shellescape v1.6.0 // indirect
-	github.com/briandowns/spinner v1.23.2 // indirect
 	github.com/fatih/color v1.7.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
