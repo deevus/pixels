@@ -1,0 +1,110 @@
+// Package sandbox defines backend-agnostic interfaces for container lifecycle,
+// execution, and network policy. Concrete implementations live in separate
+// packages and register themselves via [Register].
+package sandbox
+
+import (
+	"context"
+	"io"
+	"time"
+)
+
+// Backend manages the lifecycle of sandbox instances and their snapshots.
+type Backend interface {
+	Create(ctx context.Context, opts CreateOpts) (*Instance, error)
+	Get(ctx context.Context, name string) (*Instance, error)
+	List(ctx context.Context) ([]Instance, error)
+	Start(ctx context.Context, name string) error
+	Stop(ctx context.Context, name string) error
+	Delete(ctx context.Context, name string) error
+
+	CreateSnapshot(ctx context.Context, name, label string) error
+	ListSnapshots(ctx context.Context, name string) ([]Snapshot, error)
+	DeleteSnapshot(ctx context.Context, name, label string) error
+	RestoreSnapshot(ctx context.Context, name, label string) error
+	CloneFrom(ctx context.Context, source, label, newName string) error
+
+	Capabilities() Capabilities
+	Close() error
+}
+
+// Exec runs commands and interactive sessions inside a sandbox instance.
+type Exec interface {
+	Run(ctx context.Context, name string, opts ExecOpts) (exitCode int, err error)
+	Output(ctx context.Context, name string, cmd []string) ([]byte, error)
+	Console(ctx context.Context, name string, opts ConsoleOpts) error
+	Ready(ctx context.Context, name string, timeout time.Duration) error
+}
+
+// NetworkPolicy controls egress filtering for a sandbox instance.
+type NetworkPolicy interface {
+	SetEgressMode(ctx context.Context, name string, mode EgressMode) error
+	AllowDomain(ctx context.Context, name, domain string) error
+	DenyDomain(ctx context.Context, name, domain string) error
+	GetPolicy(ctx context.Context, name string) (*Policy, error)
+}
+
+// Sandbox composes all sandbox capabilities into a single interface.
+type Sandbox interface {
+	Backend
+	Exec
+	NetworkPolicy
+}
+
+// Instance is the backend-agnostic representation of a container.
+type Instance struct {
+	Name      string
+	Status    string
+	Addresses []string
+}
+
+// Snapshot is a point-in-time capture of an instance's filesystem.
+type Snapshot struct {
+	Label string
+	Size  int64
+}
+
+// CreateOpts holds parameters for creating a new sandbox instance.
+type CreateOpts struct {
+	Name   string
+	Image  string
+	CPU    string
+	Memory int64
+}
+
+// ExecOpts holds parameters for running a command inside a sandbox.
+type ExecOpts struct {
+	Cmd    []string
+	Env    []string
+	Stdin  io.Reader
+	Stdout io.Writer
+	Stderr io.Writer
+}
+
+// ConsoleOpts holds parameters for attaching an interactive console.
+type ConsoleOpts struct {
+	Env       []string
+	RemoteCmd []string
+}
+
+// EgressMode controls what network traffic a sandbox may initiate.
+type EgressMode string
+
+const (
+	EgressUnrestricted EgressMode = "unrestricted"
+	EgressAgent        EgressMode = "agent"
+	EgressAllowlist    EgressMode = "allowlist"
+)
+
+// Policy describes the current egress policy for a sandbox instance.
+type Policy struct {
+	Mode    EgressMode
+	Domains []string
+}
+
+// Capabilities advertises optional features a backend supports.
+type Capabilities struct {
+	Snapshots     bool
+	CloneFrom     bool
+	EgressControl bool
+}
