@@ -1,28 +1,39 @@
 # pixels
 
-Disposable Linux containers for AI coding agents, powered by TrueNAS and Incus.
+Disposable Linux containers for AI coding agents, with extensible backends.
 
-Spin up sandboxed Linux containers pre-loaded with AI coding tools (Claude Code, Codex, OpenCode via mise). Each container gets SSH access, ZFS snapshot-based checkpoints, and network egress policies that control what the agent can reach. Managed entirely from the CLI over TrueNAS WebSocket API.
+Spin up sandboxed Linux containers pre-loaded with AI coding tools (Claude Code, Codex, OpenCode via mise). Each container gets snapshot-based checkpoints and network egress policies that control what the agent can reach. Ships with two backends: **Incus** (default, connects directly to a local or remote Incus daemon) and **TrueNAS** (manages Incus containers on TrueNAS SCALE via its WebSocket API).
 
 ## Features
 
+- **Extensible backends** -- Incus native (default) or TrueNAS-managed, selected via config
 - **Container lifecycle** -- create, start, stop, destroy, and list Incus containers
-- **SSH access** -- interactive console and remote command execution
-- **ZFS checkpoints** -- snapshot, restore, delete, and clone containers from checkpoints
+- **Console and exec** -- interactive console and remote command execution via native Incus API or SSH (backend-dependent)
+- **Checkpoints** -- snapshot, restore, delete, and clone containers from checkpoints
 - **AI agent provisioning** -- automatically installs mise, Claude Code, Codex, and OpenCode
 - **Network egress policies** -- restrict outbound traffic to AI APIs, package registries, and Git (or a custom allowlist)
 - **Configuration** -- TOML config file, `PIXELS_*` environment variables, and CLI flags
 - **Network accessible** -- each container gets its own IP, reachable from the host for running and accessing services
-- **Local caching** -- disk cache avoids WebSocket round-trips for console/exec
 
 ## Prerequisites
 
+- Go 1.25+ (for building from source)
+
+**Incus backend (default):**
+- [Incus](https://linuxcontainers.org/incus/) installed locally, or a remote Incus daemon accessible over HTTPS
+
+**TrueNAS backend:**
 - [TrueNAS SCALE](https://www.truenas.com/truenas-scale/) with Incus virtualization enabled
 - TrueNAS API key (create one in the TrueNAS web UI under Credentials > API Keys)
-- Go 1.25+ (for building from source)
 - SSH key pair (defaults to `~/.ssh/id_ed25519`)
 
 ## Installation
+
+```bash
+mise use -g github:deevus/pixels
+```
+
+Or via `go install`:
 
 ```bash
 go install github.com/deevus/pixels@latest
@@ -67,9 +78,9 @@ pixels destroy task2
 | `pixels stop <name>` | Stop a running container |
 | `pixels destroy <name>` | Permanently destroy a container and all its checkpoints |
 | `pixels list` | List all containers with status and IP |
-| `pixels console <name>` | Open an interactive SSH session |
-| `pixels exec <name> -- <command...>` | Run a command via SSH |
-| `pixels checkpoint create <name>` | Create a ZFS snapshot |
+| `pixels console <name>` | Open an interactive session |
+| `pixels exec <name> -- <command...>` | Run a command in the container |
+| `pixels checkpoint create <name>` | Create a snapshot |
 | `pixels checkpoint list <name>` | List checkpoints with sizes |
 | `pixels checkpoint restore <name> <label>` | Restore to a checkpoint |
 | `pixels checkpoint delete <name> <label>` | Delete a checkpoint |
@@ -78,7 +89,7 @@ pixels destroy task2
 | `pixels network allow <name> <domain>` | Add a domain to the allowlist |
 | `pixels network deny <name> <domain>` | Remove a domain from the allowlist |
 
-Global flags: `--host`, `--api-key`, `-u/--username`, `-v/--verbose`
+Global flags: `-v/--verbose`
 
 ## Container Lifecycle
 
@@ -101,9 +112,11 @@ pixels create newbox --from mybox
 
 All containers are prefixed `px-` internally. Commands accept bare names (e.g., `mybox` becomes `px-mybox`).
 
-## SSH Access
+## Console and Exec
 
-**Console** opens an interactive SSH session with zmx session persistence.
+The **Incus backend** uses the native Incus exec API over WebSocket -- no SSH needed. The **TrueNAS backend** uses SSH to reach the container.
+
+**Console** opens an interactive session with zmx session persistence.
 Disconnecting and reconnecting re-attaches to the same session:
 
 ```bash
@@ -126,11 +139,11 @@ pixels sessions mybox
 pixels exec mybox -- ls -la /home/pixel
 ```
 
-Both commands check the local cache first for the container's IP, falling back to the TrueNAS API. SSH key auth is verified on connect -- if it fails, the current machine's public key is automatically written to the container.
+With the TrueNAS backend, SSH key auth is verified on connect -- if it fails, the current machine's public key is automatically written to the container.
 
 ## Checkpoints
 
-Checkpoints are ZFS snapshots of the container's root filesystem.
+Checkpoints are snapshots of the container's root filesystem. The underlying mechanism depends on the storage backend (ZFS, btrfs, etc.).
 
 ```bash
 # Create with auto-generated label
@@ -169,10 +182,10 @@ By default, new containers are provisioned with:
 - Environment variables from config written to `/etc/environment`
 - **Dev tools**: mise, Node.js LTS, Claude Code, Codex, and OpenCode (installed via a background systemd service)
 
-Dev tools install asynchronously after container creation. Use `--console` to wait for them to finish before dropping into a shell, or monitor progress with:
+Dev tools install asynchronously after container creation via [zmx](https://zmx.sh) sessions. Use `--console` to wait for provisioning to finish before dropping into a shell, or check progress with:
 
 ```bash
-pixels exec mybox -- sudo journalctl -fu pixels-devtools
+pixels status mybox
 ```
 
 Disable provisioning entirely with `--no-provision`, or just dev tools via config:
@@ -230,8 +243,18 @@ Egress is enforced via nftables rules inside the container with restricted sudo 
 Create `~/.config/pixels/config.toml`:
 
 ```toml
+# backend = "incus"          # default; or "truenas"
+
+[incus]
+# socket = ""                # local unix socket (default: /var/lib/incus/unix.socket)
+# remote = ""                # remote Incus HTTPS URL
+# client_cert = ""           # TLS client cert for remote
+# client_key = ""            # TLS client key for remote
+# server_cert = ""           # server CA cert for remote
+# project = ""               # Incus project name
+
 [truenas]
-host = "truenas.local"
+# host = "truenas.local"
 # api_key: prefer PIXELS_TRUENAS_API_KEY env var over storing here
 # username = "root"           # default
 # insecure_skip_verify = false # default; set true for self-signed certs
@@ -241,6 +264,7 @@ host = "truenas.local"
 # cpu = "2"                  # default
 # memory = 2048              # MiB, default
 # pool = "tank"              # discovered from server; override if needed
+# network = ""               # Incus network name (e.g. "incusbr0")
 # dns = ["1.1.1.1"]          # optional; nameservers to inject into containers
 
 [ssh]
@@ -256,20 +280,33 @@ host = "truenas.local"
 # allow = ["api.example.com"]  # additional domains for agent/allowlist modes
 
 [env]
+# Image vars — written to /etc/environment inside the container:
 # ANTHROPIC_API_KEY = "sk-ant-..."
 # OPENAI_API_KEY = "sk-..."
+#
+# Forward from host env — passed to console/exec sessions at runtime:
+# ANTHROPIC_API_KEY = { forward = true }
+#
+# Session-only literal — passed to console/exec but NOT written to /etc/environment:
+# MY_VAR = { value = "some-value", session_only = true }
 ```
 
 ### Priority Order
 
 1. TOML config file (`~/.config/pixels/config.toml`)
-2. Environment variables (`PIXELS_TRUENAS_HOST`, `PIXELS_TRUENAS_API_KEY`, etc.)
-3. CLI flags (`--host`, `--api-key`, `-u`)
+2. Environment variables (`PIXELS_BACKEND`, `PIXELS_TRUENAS_HOST`, etc.)
 
 ### Environment Variables
 
 | Variable | Config key |
 |----------|-----------|
+| `PIXELS_BACKEND` | `backend` |
+| `PIXELS_INCUS_SOCKET` | `incus.socket` |
+| `PIXELS_INCUS_REMOTE` | `incus.remote` |
+| `PIXELS_INCUS_CLIENT_CERT` | `incus.client_cert` |
+| `PIXELS_INCUS_CLIENT_KEY` | `incus.client_key` |
+| `PIXELS_INCUS_SERVER_CERT` | `incus.server_cert` |
+| `PIXELS_INCUS_PROJECT` | `incus.project` |
 | `PIXELS_TRUENAS_HOST` | `truenas.host` |
 | `PIXELS_TRUENAS_USERNAME` | `truenas.username` |
 | `PIXELS_TRUENAS_API_KEY` | `truenas.api_key` |
@@ -281,7 +318,6 @@ host = "truenas.local"
 | `PIXELS_DEFAULT_POOL` | `defaults.pool` |
 | `PIXELS_SSH_USER` | `ssh.user` |
 | `PIXELS_SSH_KEY` | `ssh.key` |
-| `PIXELS_CHECKPOINT_DATASET_PREFIX` | `checkpoint.dataset_prefix` |
 | `PIXELS_PROVISION_ENABLED` | `provision.enabled` |
 | `PIXELS_PROVISION_DEVTOOLS` | `provision.devtools` |
 | `PIXELS_NETWORK_EGRESS` | `network.egress` |

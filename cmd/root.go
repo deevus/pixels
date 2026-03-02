@@ -26,21 +26,11 @@ var rootCmd = &cobra.Command{
 	Short: "Disposable Linux containers via Incus",
 	Long:  "Create, checkpoint, and restore disposable Incus containers.",
 	SilenceUsage: true,
-	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+	PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
 		var err error
 		cfg, err = config.Load()
 		if err != nil {
 			return err
-		}
-		// TrueNAS-specific CLI flag overrides.
-		if v, _ := cmd.Flags().GetString("host"); v != "" {
-			cfg.TrueNAS.Host = v
-		}
-		if v, _ := cmd.Flags().GetString("api-key"); v != "" {
-			cfg.TrueNAS.APIKey = v
-		}
-		if v, _ := cmd.Flags().GetString("username"); v != "" {
-			cfg.TrueNAS.Username = v
 		}
 		return nil
 	},
@@ -48,9 +38,6 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
-	rootCmd.PersistentFlags().String("host", "", "TrueNAS host (overrides config)")
-	rootCmd.PersistentFlags().String("api-key", "", "TrueNAS API key (overrides config)")
-	rootCmd.PersistentFlags().StringP("username", "u", "", "TrueNAS username (overrides config)")
 }
 
 func logv(cmd *cobra.Command, format string, a ...any) {
