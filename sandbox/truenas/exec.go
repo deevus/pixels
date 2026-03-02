@@ -2,6 +2,7 @@ package truenas
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"time"
@@ -19,9 +20,14 @@ func (t *TrueNAS) Run(ctx context.Context, name string, opts sandbox.ExecOpts) (
 		return 1, err
 	}
 
+	user := t.cfg.sshUser
+	if opts.Root {
+		user = "root"
+	}
+
 	cc := ssh.ConnConfig{
 		Host:    ip,
-		User:    t.cfg.sshUser,
+		User:    user,
 		KeyPath: t.cfg.sshKey,
 		Env:     envToMap(opts.Env),
 	}
@@ -76,13 +82,34 @@ func (t *TrueNAS) Console(ctx context.Context, name string, opts sandbox.Console
 	return ssh.Console(cc, remoteCmd)
 }
 
-// Ready waits until the instance is reachable via SSH.
+// Ready waits until the instance is reachable via SSH. If key auth fails,
+// it pushes the current machine's SSH public key via the TrueNAS file API.
 func (t *TrueNAS) Ready(ctx context.Context, name string, timeout time.Duration) error {
 	ip, err := t.resolveRunningIP(ctx, name)
 	if err != nil {
 		return err
 	}
-	return t.ssh.WaitReady(ctx, ip, timeout, nil)
+	if err := t.ssh.WaitReady(ctx, ip, timeout, nil); err != nil {
+		return err
+	}
+
+	// Test key auth and push the key if it fails.
+	cc := ssh.ConnConfig{
+		Host:    ip,
+		User:    t.cfg.sshUser,
+		KeyPath: t.cfg.sshKey,
+	}
+	if err := ssh.TestAuth(ctx, cc); err != nil {
+		pubKey := readSSHPubKey(t.cfg.sshKey)
+		if pubKey == "" {
+			return fmt.Errorf("SSH key auth failed and no public key at %s.pub", t.cfg.sshKey)
+		}
+		full := "px-" + name
+		if writeErr := t.client.WriteAuthorizedKey(ctx, full, pubKey); writeErr != nil {
+			return fmt.Errorf("SSH key auth failed; writing key: %w", writeErr)
+		}
+	}
+	return nil
 }
 
 // envToMap converts a slice of "KEY=VALUE" pairs to a map.
