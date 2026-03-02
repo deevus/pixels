@@ -4,13 +4,11 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/briandowns/spinner"
 	"github.com/spf13/cobra"
 
-	"github.com/deevus/pixels/internal/cache"
 	"github.com/deevus/pixels/internal/provision"
 	"github.com/deevus/pixels/sandbox"
 )
@@ -46,29 +44,21 @@ func runConsole(cmd *cobra.Command, args []string) error {
 	}
 	defer sb.Close()
 
-	// Try local cache first for fast path (already running).
-	var needsStart bool
-	if cached := cache.Get(name); cached != nil && cached.IP != "" && cached.Status == "RUNNING" {
-		// Already running, skip start check.
-	} else {
-		inst, err := sb.Get(ctx, name)
-		if err != nil {
-			return fmt.Errorf("looking up %s: %w", name, err)
-		}
+	inst, err := sb.Get(ctx, name)
+	if err != nil {
+		return fmt.Errorf("looking up %s: %w", name, err)
+	}
 
-		if inst.Status != "RUNNING" {
-			needsStart = true
-			fmt.Fprintf(cmd.ErrOrStderr(), "Starting %s...\n", name)
-			if err := sb.Start(ctx, name); err != nil {
-				return fmt.Errorf("starting instance: %w", err)
-			}
+	if !inst.Status.IsRunning() {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Starting %s...\n", name)
+		if err := sb.Start(ctx, name); err != nil {
+			return fmt.Errorf("starting instance: %w", err)
 		}
 	}
 
 	if err := sb.Ready(ctx, name, 30*time.Second); err != nil {
 		return fmt.Errorf("waiting for instance: %w", err)
 	}
-	_ = needsStart
 
 	// Wait for provisioning to finish before opening the console.
 	runner := provision.NewRunnerWith(&sandboxExecutor{sb: sb, name: name})
@@ -114,7 +104,7 @@ func zmxRemoteCmdViaSandbox(ctx context.Context, sb sandbox.Sandbox, name, sessi
 		Cmd: []string{"sh", "-c", "command -v zmx >/dev/null 2>&1"},
 	})
 	if err == nil && code == 0 {
-		return strings.Fields("unset XDG_RUNTIME_DIR && zmx attach " + session + " bash -l")
+		return []string{"sh", "-lc", "unset XDG_RUNTIME_DIR && zmx attach " + session + " bash -l"}
 	}
 	return nil
 }

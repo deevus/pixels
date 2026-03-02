@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -9,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/deevus/pixels/internal/cache"
 	"github.com/deevus/pixels/sandbox"
 )
 
@@ -23,14 +23,8 @@ func displayName(name string) string {
 	return strings.TrimPrefix(name, containerPrefix)
 }
 
-// resolveRunningIP returns the IP of a running container, checking the local
-// cache first to avoid a WebSocket round-trip. Falls back to the sandbox
-// interface for API lookups and updates the cache on success.
+// resolveRunningIP returns the IP of a running container via the sandbox API.
 func resolveRunningIP(ctx context.Context, name string) (string, error) {
-	if cached := cache.Get(name); cached != nil && cached.IP != "" && cached.Status == "RUNNING" {
-		return cached.IP, nil
-	}
-
 	sb, err := openSandbox()
 	if err != nil {
 		return "", err
@@ -41,15 +35,13 @@ func resolveRunningIP(ctx context.Context, name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("looking up %s: %w", name, err)
 	}
-	if inst.Status != "RUNNING" {
+	if !inst.Status.IsRunning() {
 		return "", fmt.Errorf("pixel %q is %s — start it first", name, inst.Status)
 	}
 	if len(inst.Addresses) == 0 {
 		return "", fmt.Errorf("no IP address for %s", name)
 	}
-	ip := inst.Addresses[0]
-	cache.Put(name, &cache.Entry{IP: ip, Status: inst.Status})
-	return ip, nil
+	return inst.Addresses[0], nil
 }
 
 func newTabWriter(cmd *cobra.Command) *tabwriter.Writer {
@@ -72,16 +64,23 @@ func readSSHPubKey() (string, error) {
 }
 
 // sandboxExecutor adapts sandbox.Exec to provision.Executor so that
-// provision.Runner can operate through any sandbox backend.
+// provision.Runner can operate through any sandbox backend. All commands
+// run as root since provisioning checks access /root/ and zmx sessions.
 type sandboxExecutor struct {
 	sb   sandbox.Exec
 	name string
 }
 
 func (e *sandboxExecutor) Exec(ctx context.Context, command []string) (int, error) {
-	return e.sb.Run(ctx, e.name, sandbox.ExecOpts{Cmd: command})
+	return e.sb.Run(ctx, e.name, sandbox.ExecOpts{Cmd: command, Root: true})
 }
 
 func (e *sandboxExecutor) Output(ctx context.Context, command []string) ([]byte, error) {
-	return e.sb.Output(ctx, e.name, command)
+	var buf bytes.Buffer
+	_, err := e.sb.Run(ctx, e.name, sandbox.ExecOpts{
+		Cmd:    command,
+		Stdout: &buf,
+		Root:   true,
+	})
+	return buf.Bytes(), err
 }
