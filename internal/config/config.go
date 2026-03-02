@@ -11,7 +11,9 @@ import (
 )
 
 type Config struct {
+	Backend    string         `toml:"backend"    env:"PIXELS_BACKEND"` // "truenas" or "incus"
 	TrueNAS    TrueNAS        `toml:"truenas"`
+	Incus      Incus          `toml:"incus"`
 	Defaults   Defaults       `toml:"defaults"`
 	SSH        SSH            `toml:"ssh"`
 	Checkpoint Checkpoint     `toml:"checkpoint"`
@@ -22,6 +24,15 @@ type Config struct {
 	// Resolved env vars (not from TOML directly).
 	Env        map[string]string `toml:"-"` // image vars → /etc/environment
 	EnvForward map[string]string `toml:"-"` // session vars → SSH SetEnv
+}
+
+type Incus struct {
+	Socket     string `toml:"socket"      env:"PIXELS_INCUS_SOCKET"`
+	Remote     string `toml:"remote"      env:"PIXELS_INCUS_REMOTE"`
+	ClientCert string `toml:"client_cert" env:"PIXELS_INCUS_CLIENT_CERT"`
+	ClientKey  string `toml:"client_key"  env:"PIXELS_INCUS_CLIENT_KEY"`
+	ServerCert string `toml:"server_cert" env:"PIXELS_INCUS_SERVER_CERT"`
+	Project    string `toml:"project"     env:"PIXELS_INCUS_PROJECT"`
 }
 
 type TrueNAS struct {
@@ -82,6 +93,7 @@ func (n *Network) IsRestricted() bool {
 
 func Load() (*Config, error) {
 	cfg := &Config{
+		Backend: "incus",
 		TrueNAS: TrueNAS{
 			Username: "root",
 		},
@@ -112,6 +124,10 @@ func Load() (*Config, error) {
 	}
 
 	cfg.SSH.Key = expandHome(cfg.SSH.Key)
+	cfg.Incus.Socket = expandHome(cfg.Incus.Socket)
+	cfg.Incus.ClientCert = expandHome(cfg.Incus.ClientCert)
+	cfg.Incus.ClientKey = expandHome(cfg.Incus.ClientKey)
+	cfg.Incus.ServerCert = expandHome(cfg.Incus.ServerCert)
 
 	if err := resolveEnv(cfg); err != nil {
 		return nil, err

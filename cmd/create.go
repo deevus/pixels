@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/deevus/pixels/internal/provision"
-	"github.com/deevus/pixels/internal/ssh"
 	"github.com/deevus/pixels/sandbox"
 )
 
@@ -82,7 +81,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		m["egress"] = egressMode
 	}
 
-	sb, err := sandbox.Open("truenas", m)
+	sb, err := sandbox.Open(cfg.Backend, m)
 	if err != nil {
 		return err
 	}
@@ -196,15 +195,24 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "  Status:   pixels status %s\n", name)
 	}
 
-	if openConsole && ip != "" {
-		runner := provision.NewRunner(ip, "root", cfg.SSH.Key)
+	if openConsole {
+		runner := provision.NewRunnerWith(&sandboxExecutor{sb: sb, name: name})
 		runner.WaitProvisioned(ctx, func(status string) {
 			setStatus(status)
 			logv(cmd, "Provision: %s", status)
 		})
 		stopSpinner()
-		cc := ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key, Env: cfg.EnvForward}
-		return ssh.Console(cc, zmxRemoteCmd(ctx, cc, "console"))
+
+		var envSlice []string
+		for k, v := range cfg.EnvForward {
+			envSlice = append(envSlice, k+"="+v)
+		}
+
+		remoteCmd := zmxRemoteCmdViaSandbox(ctx, sb, name, "console")
+		return sb.Console(ctx, name, sandbox.ConsoleOpts{
+			Env:       envSlice,
+			RemoteCmd: remoteCmd,
+		})
 	}
 
 	return nil

@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/deevus/pixels/internal/cache"
+	"github.com/deevus/pixels/sandbox"
 )
 
 const containerPrefix = "px-"
@@ -68,4 +69,19 @@ func readSSHPubKey() (string, error) {
 		return "", fmt.Errorf("reading SSH public key %s: %w", pubPath, err)
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+// sandboxExecutor adapts sandbox.Exec to provision.Executor so that
+// provision.Runner can operate through any sandbox backend.
+type sandboxExecutor struct {
+	sb   sandbox.Exec
+	name string
+}
+
+func (e *sandboxExecutor) Exec(ctx context.Context, command []string) (int, error) {
+	return e.sb.Run(ctx, e.name, sandbox.ExecOpts{Cmd: command})
+}
+
+func (e *sandboxExecutor) Output(ctx context.Context, command []string) ([]byte, error) {
+	return e.sb.Output(ctx, e.name, command)
 }
