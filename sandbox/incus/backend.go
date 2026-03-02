@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -11,7 +12,6 @@ import (
 	incusclient "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
 
-	"github.com/deevus/pixels/internal/cache"
 	"github.com/deevus/pixels/internal/egress"
 	"github.com/deevus/pixels/internal/provision"
 	"github.com/deevus/pixels/internal/retry"
@@ -68,13 +68,19 @@ func (i *Incus) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox.I
 		}
 	}
 
+	source := api.InstanceSource{
+		Type:  "image",
+		Alias: image,
+	}
+	if i.cfg.imageServer != "" {
+		source.Server   = i.cfg.imageServer
+		source.Protocol = "simplestreams"
+	}
+
 	req := api.InstancesPost{
-		Name: full,
-		Type: api.InstanceTypeContainer,
-		Source: api.InstanceSource{
-			Type:  "image",
-			Alias: image,
-		},
+		Name:   full,
+		Type:   api.InstanceTypeContainer,
+		Source: source,
 		InstancePut: api.InstancePut{
 			Config:  config,
 			Devices: devices,
@@ -108,7 +114,7 @@ func (i *Incus) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox.I
 		}
 		return &sandbox.Instance{
 			Name:   name,
-			Status: inst.Status,
+			Status: normalizeStatus(inst.Status),
 		}, nil
 	}
 
@@ -143,15 +149,9 @@ func (i *Incus) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox.I
 		return nil, fmt.Errorf("getting instance: %w", err)
 	}
 
-	var ip string
-	if len(addrs) > 0 {
-		ip = addrs[0]
-	}
-	cache.Put(name, &cache.Entry{IP: ip, Status: inst.Status})
-
 	return &sandbox.Instance{
 		Name:      name,
-		Status:    inst.Status,
+		Status:    normalizeStatus(inst.Status),
 		Addresses: addrs,
 	}, nil
 }
@@ -307,7 +307,7 @@ func (i *Incus) Get(ctx context.Context, name string) (*sandbox.Instance, error)
 
 	return &sandbox.Instance{
 		Name:      name,
-		Status:    inst.Status,
+		Status:    normalizeStatus(inst.Status),
 		Addresses: extractIPv4(state),
 	}, nil
 }
@@ -326,7 +326,7 @@ func (i *Incus) List(ctx context.Context) ([]sandbox.Instance, error) {
 		}
 		si := sandbox.Instance{
 			Name:   unprefixed(inst.Name),
-			Status: inst.Status,
+			Status: normalizeStatus(inst.Status),
 		}
 		// Get addresses from instance state.
 		if state, _, err := i.server.GetInstanceState(inst.Name); err == nil {
@@ -367,7 +367,6 @@ func (i *Incus) Stop(ctx context.Context, name string) error {
 	if err := op.WaitContext(ctx); err != nil {
 		return fmt.Errorf("waiting for %s to stop: %w", name, err)
 	}
-	cache.Delete(name)
 	return nil
 }
 
@@ -395,8 +394,6 @@ func (i *Incus) Delete(ctx context.Context, name string) error {
 	}); err != nil {
 		return err
 	}
-
-	cache.Delete(name)
 	return nil
 }
 
@@ -468,17 +465,6 @@ func (i *Incus) RestoreSnapshot(ctx context.Context, name, label string) error {
 		return fmt.Errorf("starting after restore: %w", err)
 	}
 
-	// Update cache.
-	state, _, err := i.server.GetInstanceState(full)
-	if err == nil {
-		addrs := extractIPv4(state)
-		var ip string
-		if len(addrs) > 0 {
-			ip = addrs[0]
-		}
-		cache.Put(name, &cache.Entry{IP: ip, Status: "RUNNING"})
-	}
-
 	return nil
 }
 
@@ -508,6 +494,9 @@ func (i *Incus) CloneFrom(ctx context.Context, source, label, newName string) er
 
 	return nil
 }
+
+// normalizeStatus converts Incus status strings ("Running") to sandbox.Status ("RUNNING").
+func normalizeStatus(s string) sandbox.Status { return sandbox.Status(strings.ToUpper(s)) }
 
 // extractIPv4 extracts all global IPv4 addresses from instance state.
 func extractIPv4(state *api.InstanceState) []string {
@@ -543,22 +532,25 @@ func readSSHPubKey(keyPath string) string {
 // execSimple runs a command inside a container and waits for it to complete.
 // Returns the exit code, ignoring errors for best-effort operations.
 func (i *Incus) execSimple(ctx context.Context, full string, cmd []string) int {
+	dataDone := make(chan bool)
+	args := &incusclient.InstanceExecArgs{
+		Stdout:   io.Discard,
+		Stderr:   io.Discard,
+		DataDone: dataDone,
+	}
+
 	op, err := i.server.ExecInstance(full, api.InstanceExecPost{
 		Command:     cmd,
-		WaitForWS:   false,
+		WaitForWS:   true,
 		Interactive: false,
-	}, nil)
+	}, args)
 	if err != nil {
 		return 1
 	}
 	if err := op.WaitContext(ctx); err != nil {
 		return 1
 	}
-	md := op.Get().Metadata
-	if md != nil {
-		if rc, ok := md["return"].(float64); ok {
-			return int(rc)
-		}
-	}
-	return 0
+	<-dataDone
+
+	return exitCodeFromOp(op)
 }
