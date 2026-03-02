@@ -1,17 +1,11 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"time"
 
-	truenas "github.com/deevus/truenas-go"
 	"github.com/dustin/go-humanize"
 	"github.com/spf13/cobra"
-
-	"github.com/deevus/pixels/internal/cache"
-	"github.com/deevus/pixels/internal/ssh"
-	tnc "github.com/deevus/pixels/internal/truenas"
 )
 
 func init() {
@@ -52,17 +46,7 @@ func init() {
 	rootCmd.AddCommand(cpCmd)
 }
 
-// resolveDatasetPath returns the ZFS dataset path for a container.
-// Priority: config override > auto-detect from virt.global.config.
-func resolveDatasetPath(ctx context.Context, client *tnc.Client, name string) (string, error) {
-	if cfg.Checkpoint.DatasetPrefix != "" {
-		return cfg.Checkpoint.DatasetPrefix + "/" + containerName(name), nil
-	}
-	return client.ContainerDataset(ctx, containerName(name))
-}
-
 func runCheckpointCreate(cmd *cobra.Command, args []string) error {
-	ctx := cmd.Context()
 	name := args[0]
 	label, _ := cmd.Flags().GetString("label")
 
@@ -70,23 +54,14 @@ func runCheckpointCreate(cmd *cobra.Command, args []string) error {
 		label = "px-" + time.Now().Format("20060102-150405")
 	}
 
-	client, err := connectClient(ctx)
+	sb, err := openSandbox()
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer sb.Close()
 
-	ds, err := resolveDatasetPath(ctx, client, name)
-	if err != nil {
+	if err := sb.CreateSnapshot(cmd.Context(), name, label); err != nil {
 		return err
-	}
-
-	_, err = client.Snapshot.Create(ctx, truenas.CreateSnapshotOpts{
-		Dataset: ds,
-		Name:    label,
-	})
-	if err != nil {
-		return fmt.Errorf("creating checkpoint: %w", err)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Checkpoint %q created for %s\n", label, name)
@@ -94,21 +69,15 @@ func runCheckpointCreate(cmd *cobra.Command, args []string) error {
 }
 
 func runCheckpointList(cmd *cobra.Command, args []string) error {
-	ctx := cmd.Context()
 	name := args[0]
 
-	client, err := connectClient(ctx)
+	sb, err := openSandbox()
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer sb.Close()
 
-	ds, err := resolveDatasetPath(ctx, client, name)
-	if err != nil {
-		return err
-	}
-
-	snapshots, err := client.ListSnapshots(ctx, ds)
+	snapshots, err := sb.ListSnapshots(cmd.Context(), name)
 	if err != nil {
 		return err
 	}
@@ -121,83 +90,49 @@ func runCheckpointList(cmd *cobra.Command, args []string) error {
 	w := newTabWriter(cmd)
 	fmt.Fprintln(w, "LABEL\tSIZE")
 	for _, s := range snapshots {
-		fmt.Fprintf(w, "%s\t%s\n", s.SnapshotName, humanize.IBytes(uint64(s.Referenced)))
+		fmt.Fprintf(w, "%s\t%s\n", s.Label, humanize.IBytes(uint64(s.Size)))
 	}
 	return w.Flush()
 }
 
 func runCheckpointRestore(cmd *cobra.Command, args []string) error {
-	ctx := cmd.Context()
 	name, label := args[0], args[1]
 
-	client, err := connectClient(ctx)
+	sb, err := openSandbox()
 	if err != nil {
 		return err
 	}
-	defer client.Close()
-
-	ds, err := resolveDatasetPath(ctx, client, name)
-	if err != nil {
-		return err
-	}
-	sid := ds + "@" + label
+	defer sb.Close()
 
 	start := time.Now()
 
-	fmt.Fprintf(cmd.ErrOrStderr(), "Stopping %s...\n", name)
-	if err := client.Virt.StopInstance(ctx, containerName(name), truenas.StopVirtInstanceOpts{
-		Timeout: 30,
-	}); err != nil {
-		return fmt.Errorf("stopping %s: %w", name, err)
-	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "Restoring %s to %q...\n", name, label)
 
-	if err := client.SnapshotRollback(ctx, sid); err != nil {
+	if err := sb.RestoreSnapshot(cmd.Context(), name, label); err != nil {
 		return err
-	}
-
-	if err := client.Virt.StartInstance(ctx, containerName(name)); err != nil {
-		return fmt.Errorf("starting %s: %w", name, err)
-	}
-
-	instance, err := client.Virt.GetInstance(ctx, containerName(name))
-	if err != nil {
-		return fmt.Errorf("refreshing %s: %w", name, err)
-	}
-
-	ip := resolveIP(instance)
-	cache.Put(name, &cache.Entry{IP: ip, Status: instance.Status})
-	if ip != "" {
-		if err := ssh.WaitReady(ctx, ip, 30*time.Second, nil); err != nil {
-			fmt.Fprintf(cmd.ErrOrStderr(), "Warning: SSH not ready: %v\n", err)
-		}
 	}
 
 	elapsed := time.Since(start).Truncate(100 * time.Millisecond)
 	fmt.Fprintf(cmd.OutOrStdout(), "Restored %s to %q in %s\n", name, label, elapsed)
-	if ip != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "  SSH: ssh %s@%s\n", cfg.SSH.User, ip)
+
+	inst, err := sb.Get(cmd.Context(), name)
+	if err == nil && len(inst.Addresses) > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "  SSH: ssh %s@%s\n", cfg.SSH.User, inst.Addresses[0])
 	}
 	return nil
 }
 
 func runCheckpointDelete(cmd *cobra.Command, args []string) error {
-	ctx := cmd.Context()
 	name, label := args[0], args[1]
 
-	client, err := connectClient(ctx)
+	sb, err := openSandbox()
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer sb.Close()
 
-	ds, err := resolveDatasetPath(ctx, client, name)
-	if err != nil {
+	if err := sb.DeleteSnapshot(cmd.Context(), name, label); err != nil {
 		return err
-	}
-	sid := ds + "@" + label
-
-	if err := client.Snapshot.Delete(ctx, sid); err != nil {
-		return fmt.Errorf("deleting checkpoint: %w", err)
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Deleted checkpoint %q from %s\n", label, name)

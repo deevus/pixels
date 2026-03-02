@@ -3,10 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	truenas "github.com/deevus/truenas-go"
 	"github.com/spf13/cobra"
-
-	"github.com/deevus/pixels/internal/cache"
 )
 
 func init() {
@@ -19,22 +16,18 @@ func init() {
 }
 
 func runStop(cmd *cobra.Command, args []string) error {
-	ctx := cmd.Context()
 	name := args[0]
 
-	client, err := connectClient(ctx)
+	sb, err := openSandbox()
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer sb.Close()
 
-	if err := client.Virt.StopInstance(ctx, containerName(name), truenas.StopVirtInstanceOpts{
-		Timeout: 30,
-	}); err != nil {
-		return fmt.Errorf("stopping %s: %w", name, err)
+	if err := sb.Stop(cmd.Context(), name); err != nil {
+		return err
 	}
 
-	cache.Delete(name)
 	fmt.Fprintf(cmd.OutOrStdout(), "Stopped %s\n", name)
 	return nil
 }

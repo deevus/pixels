@@ -16,15 +16,13 @@ func init() {
 }
 
 func runList(cmd *cobra.Command, _ []string) error {
-	ctx := cmd.Context()
-
-	client, err := connectClient(ctx)
+	sb, err := openSandbox()
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer sb.Close()
 
-	instances, err := client.ListInstances(ctx)
+	instances, err := sb.List(cmd.Context())
 	if err != nil {
 		return err
 	}
@@ -38,13 +36,10 @@ func runList(cmd *cobra.Command, _ []string) error {
 	fmt.Fprintln(w, "NAME\tSTATUS\tIP")
 	for _, inst := range instances {
 		ip := "—"
-		for _, a := range inst.Aliases {
-			if (a.Type == "INET" || a.Type == "ipv4") && a.Address != "" {
-				ip = a.Address
-				break
-			}
+		if len(inst.Addresses) > 0 {
+			ip = inst.Addresses[0]
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", displayName(inst.Name), inst.Status, ip)
+		fmt.Fprintf(w, "%s\t%s\t%s\n", inst.Name, inst.Status, ip)
 	}
 	return w.Flush()
 }
