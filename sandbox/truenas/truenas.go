@@ -1,0 +1,74 @@
+// Package truenas implements the sandbox.Sandbox interface using TrueNAS
+// Incus containers via the WebSocket API.
+package truenas
+
+import (
+	"context"
+
+	"github.com/deevus/pixels/sandbox"
+
+	tnc "github.com/deevus/pixels/internal/truenas"
+)
+
+// Compile-time check that TrueNAS implements sandbox.Sandbox.
+var _ sandbox.Sandbox = (*TrueNAS)(nil)
+
+func init() {
+	sandbox.Register("truenas", func(cfg map[string]string) (sandbox.Sandbox, error) {
+		return New(cfg)
+	})
+}
+
+// TrueNAS implements sandbox.Sandbox by wrapping internal/truenas.Client,
+// internal/ssh, internal/cache, and internal/egress.
+type TrueNAS struct {
+	client *tnc.Client
+	cfg    *tnConfig
+	ssh    sshRunner
+}
+
+// New creates a TrueNAS sandbox backend from a flat config map.
+func New(cfg map[string]string) (*TrueNAS, error) {
+	c, err := parseCfg(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := tnc.Connect(context.Background(), c.toConfig())
+	if err != nil {
+		return nil, err
+	}
+
+	return &TrueNAS{
+		client: client,
+		cfg:    c,
+		ssh:    realSSH{},
+	}, nil
+}
+
+// NewForTest creates a TrueNAS backend with injected dependencies for testing.
+func NewForTest(client *tnc.Client, ssh sshRunner, cfg map[string]string) (*TrueNAS, error) {
+	c, err := parseCfg(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &TrueNAS{
+		client: client,
+		cfg:    c,
+		ssh:    ssh,
+	}, nil
+}
+
+// Capabilities advertises that TrueNAS supports all optional features.
+func (t *TrueNAS) Capabilities() sandbox.Capabilities {
+	return sandbox.Capabilities{
+		Snapshots:     true,
+		CloneFrom:     true,
+		EgressControl: true,
+	}
+}
+
+// Close closes the underlying TrueNAS WebSocket connection.
+func (t *TrueNAS) Close() error {
+	return t.client.Close()
+}

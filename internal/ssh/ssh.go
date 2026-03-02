@@ -55,7 +55,7 @@ func WaitReady(ctx context.Context, host string, timeout time.Duration, log io.W
 
 // Exec runs a command on the remote host via SSH and returns its exit code.
 func Exec(ctx context.Context, cc ConnConfig, command []string) (int, error) {
-	args := append(sshArgs(cc), command...)
+	args := append(Args(cc), command...)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -74,7 +74,7 @@ func Exec(ctx context.Context, cc ConnConfig, command []string) (int, error) {
 // ExecQuiet runs a non-interactive command on the remote host via SSH and
 // returns its exit code. Unlike Exec, it does not attach stdin/stdout/stderr.
 func ExecQuiet(ctx context.Context, cc ConnConfig, command []string) (int, error) {
-	args := append(sshArgs(cc), command...)
+	args := append(Args(cc), command...)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 
 	if err := cmd.Run(); err != nil {
@@ -89,7 +89,7 @@ func ExecQuiet(ctx context.Context, cc ConnConfig, command []string) (int, error
 
 // Output runs a command on the remote host via SSH and returns its stdout.
 func Output(ctx context.Context, cc ConnConfig, command []string) ([]byte, error) {
-	args := append(sshArgs(cc), command...)
+	args := append(Args(cc), command...)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Stderr = os.Stderr
 	return cmd.Output()
@@ -98,7 +98,7 @@ func Output(ctx context.Context, cc ConnConfig, command []string) ([]byte, error
 // OutputQuiet runs a command on the remote host via SSH and returns its stdout,
 // discarding stderr. Use this when parsing command output programmatically.
 func OutputQuiet(ctx context.Context, cc ConnConfig, command []string) ([]byte, error) {
-	args := append(sshArgs(cc), command...)
+	args := append(Args(cc), command...)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	return cmd.Output()
 }
@@ -106,12 +106,15 @@ func OutputQuiet(ctx context.Context, cc ConnConfig, command []string) ([]byte, 
 // TestAuth runs a quick SSH connection test (ssh ... true) to verify
 // key-based authentication works. Returns nil on success.
 func TestAuth(ctx context.Context, cc ConnConfig) error {
-	args := append(sshArgs(cc), "true")
+	args := append(Args(cc), "true")
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	return cmd.Run()
 }
 
-func sshArgs(cc ConnConfig) []string {
+// Args builds the SSH command-line arguments for the given connection config.
+// It is exported for use by callers that need to construct custom exec.Cmd
+// with non-standard Stdin/Stdout/Stderr (e.g. sandbox backends).
+func Args(cc ConnConfig) []string {
 	args := []string{
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=" + os.DevNull,
@@ -152,9 +155,9 @@ func sshArgs(cc ConnConfig) []string {
 // and the command is appended after user@host.
 func consoleArgs(cc ConnConfig, remoteCmd string) []string {
 	if remoteCmd == "" {
-		return sshArgs(cc)
+		return Args(cc)
 	}
-	args := sshArgs(cc)
+	args := Args(cc)
 	// Insert -t before user@host (last element).
 	userHost := args[len(args)-1]
 	args = append(args[:len(args)-1], "-t", userHost, remoteCmd)

@@ -19,7 +19,7 @@ func TestConsole_SSHNotFound(t *testing.T) {
 
 func TestSSHArgs(t *testing.T) {
 	t.Run("with key", func(t *testing.T) {
-		args := sshArgs(ConnConfig{Host: "10.0.0.1", User: "pixel", KeyPath: "/tmp/key"})
+		args := Args(ConnConfig{Host: "10.0.0.1", User: "pixel", KeyPath: "/tmp/key"})
 		wantSuffix := []string{"-i", "/tmp/key", "pixel@10.0.0.1"}
 		got := args[len(args)-3:]
 		for i, w := range wantSuffix {
@@ -30,7 +30,7 @@ func TestSSHArgs(t *testing.T) {
 	})
 
 	t.Run("uses os.DevNull for UserKnownHostsFile", func(t *testing.T) {
-		args := sshArgs(ConnConfig{Host: "10.0.0.1", User: "pixel"})
+		args := Args(ConnConfig{Host: "10.0.0.1", User: "pixel"})
 		want := "UserKnownHostsFile=" + os.DevNull
 		found := false
 		for _, a := range args {
@@ -45,7 +45,7 @@ func TestSSHArgs(t *testing.T) {
 	})
 
 	t.Run("without key", func(t *testing.T) {
-		args := sshArgs(ConnConfig{Host: "10.0.0.1", User: "pixel"})
+		args := Args(ConnConfig{Host: "10.0.0.1", User: "pixel"})
 		last := args[len(args)-1]
 		if last != "pixel@10.0.0.1" {
 			t.Errorf("last arg = %q, want %q", last, "pixel@10.0.0.1")
@@ -66,7 +66,7 @@ func TestSSHArgs(t *testing.T) {
 				"API_KEY":      "sk-secret",
 			},
 		}
-		args := sshArgs(cc)
+		args := Args(cc)
 
 		// All vars should be in a single SetEnv directive (space-separated,
 		// sorted by key), preceded by -o. Multiple -o SetEnv flags don't
@@ -95,7 +95,7 @@ func TestSSHArgs(t *testing.T) {
 	})
 
 	t.Run("nil env produces no SetEnv", func(t *testing.T) {
-		args := sshArgs(ConnConfig{Host: "10.0.0.1", User: "pixel"})
+		args := Args(ConnConfig{Host: "10.0.0.1", User: "pixel"})
 		for _, a := range args {
 			if strings.HasPrefix(a, "SetEnv=") {
 				t.Errorf("unexpected SetEnv arg %q with nil env", a)
@@ -104,7 +104,7 @@ func TestSSHArgs(t *testing.T) {
 	})
 
 	t.Run("empty env produces no SetEnv", func(t *testing.T) {
-		args := sshArgs(ConnConfig{Host: "10.0.0.1", User: "pixel", Env: map[string]string{}})
+		args := Args(ConnConfig{Host: "10.0.0.1", User: "pixel", Env: map[string]string{}})
 		for _, a := range args {
 			if strings.HasPrefix(a, "SetEnv=") {
 				t.Errorf("unexpected SetEnv arg %q with empty env", a)
@@ -117,7 +117,7 @@ func TestConsoleArgs(t *testing.T) {
 	t.Run("no remote command", func(t *testing.T) {
 		cc := ConnConfig{Host: "10.0.0.1", User: "pixel", KeyPath: "/tmp/key"}
 		args := consoleArgs(cc, "")
-		sshA := sshArgs(cc)
+		sshA := Args(cc)
 		if len(args) != len(sshA) {
 			t.Fatalf("len(consoleArgs) = %d, want %d (same as sshArgs)", len(args), len(sshA))
 		}
