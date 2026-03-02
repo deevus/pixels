@@ -2,7 +2,6 @@ package truenas
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,22 +12,8 @@ import (
 	"github.com/deevus/truenas-go/client"
 
 	"github.com/deevus/pixels/internal/egress"
+	"github.com/deevus/pixels/internal/scripts"
 )
-
-//go:embed scripts/rc-local.sh
-var rcLocalScript string
-
-//go:embed scripts/setup-devtools.sh
-var devtoolsSetupScript string
-
-//go:embed scripts/setup-egress.sh
-var egressSetupScript string
-
-//go:embed scripts/enable-egress.sh
-var egressEnableScript string
-
-//go:embed scripts/pixels-profile.sh
-var pixelsProfileScript string
 
 // Client wraps a truenas-go WebSocket client and its typed services.
 type Client struct {
@@ -164,7 +149,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 
 	// Shell alias for detaching zmx sessions.
 	if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/profile.d/pixels.sh", truenas.WriteFileParams{
-		Content: []byte(pixelsProfileScript),
+		Content: []byte(scripts.PixelsProfile),
 		Mode:    0o644,
 	}); err != nil {
 		return fmt.Errorf("writing /etc/profile.d/pixels.sh: %w", err)
@@ -214,7 +199,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 	// Write dev tools setup script (executed later via zmx).
 	if opts.DevTools {
 		if err := c.Filesystem.WriteFile(ctx, rootfs+"/usr/local/bin/pixels-setup-devtools.sh", truenas.WriteFileParams{
-			Content: []byte(devtoolsSetupScript),
+			Content: []byte(scripts.SetupDevtools),
 			Mode:    0o755,
 		}); err != nil {
 			return fmt.Errorf("writing devtools setup script: %w", err)
@@ -266,13 +251,13 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 			return fmt.Errorf("writing restricted sudoers: %w", err)
 		}
 		if err := c.Filesystem.WriteFile(ctx, rootfs+"/usr/local/bin/pixels-setup-egress.sh", truenas.WriteFileParams{
-			Content: []byte(egressSetupScript),
+			Content: []byte(scripts.SetupEgress),
 			Mode:    0o755,
 		}); err != nil {
 			return fmt.Errorf("writing egress setup script: %w", err)
 		}
 		if err := c.Filesystem.WriteFile(ctx, rootfs+"/usr/local/bin/pixels-enable-egress.sh", truenas.WriteFileParams{
-			Content: []byte(egressEnableScript),
+			Content: []byte(scripts.EnableEgress),
 			Mode:    0o755,
 		}); err != nil {
 			return fmt.Errorf("writing egress enable script: %w", err)
@@ -295,7 +280,7 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 	// starts rc-local.service if /etc/rc.local exists and is executable.
 	if opts.SSHPubKey != "" {
 		if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/rc.local", truenas.WriteFileParams{
-			Content: []byte(rcLocalScript),
+			Content: []byte(scripts.RcLocal),
 			Mode:    0o755,
 		}); err != nil {
 			return fmt.Errorf("writing rc.local: %w", err)

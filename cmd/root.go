@@ -11,7 +11,8 @@ import (
 	"github.com/deevus/pixels/internal/config"
 	"github.com/deevus/pixels/sandbox"
 
-	// Register the TrueNAS sandbox backend.
+	// Register sandbox backends.
+	_ "github.com/deevus/pixels/sandbox/incus"
 	_ "github.com/deevus/pixels/sandbox/truenas"
 )
 
@@ -22,8 +23,8 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "pixels",
-	Short: "Disposable Linux containers on TrueNAS",
-	Long:  "Create, checkpoint, and restore disposable Incus containers on TrueNAS.",
+	Short: "Disposable Linux containers via Incus",
+	Long:  "Create, checkpoint, and restore disposable Incus containers.",
 	SilenceUsage: true,
 	PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
 		var err error
@@ -31,6 +32,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		// TrueNAS-specific CLI flag overrides.
 		if v, _ := cmd.Flags().GetString("host"); v != "" {
 			cfg.TrueNAS.Host = v
 		}
@@ -58,20 +60,11 @@ func logv(cmd *cobra.Command, format string, a ...any) {
 }
 
 // sandboxConfig returns the config map for constructing a sandbox.
+// It populates both shared keys and backend-specific keys based on cfg.Backend.
 func sandboxConfig() map[string]string {
-	m := map[string]string{
-		"host":    cfg.TrueNAS.Host,
-		"api_key": cfg.TrueNAS.APIKey,
-	}
-	if cfg.TrueNAS.Port != 0 {
-		m["port"] = strconv.Itoa(cfg.TrueNAS.Port)
-	}
-	if cfg.TrueNAS.Username != "" {
-		m["username"] = cfg.TrueNAS.Username
-	}
-	if cfg.TrueNAS.InsecureSkipVerify != nil {
-		m["insecure"] = strconv.FormatBool(*cfg.TrueNAS.InsecureSkipVerify)
-	}
+	m := map[string]string{}
+
+	// Shared keys used by all backends.
 	if cfg.Defaults.Image != "" {
 		m["image"] = cfg.Defaults.Image
 	}
@@ -90,14 +83,14 @@ func sandboxConfig() map[string]string {
 	if cfg.Defaults.Parent != "" {
 		m["parent"] = cfg.Defaults.Parent
 	}
+	if cfg.Defaults.Network != "" {
+		m["network"] = cfg.Defaults.Network
+	}
 	if cfg.SSH.User != "" {
 		m["ssh_user"] = cfg.SSH.User
 	}
 	if cfg.SSH.Key != "" {
 		m["ssh_key"] = cfg.SSH.Key
-	}
-	if cfg.Checkpoint.DatasetPrefix != "" {
-		m["dataset_prefix"] = cfg.Checkpoint.DatasetPrefix
 	}
 	m["provision"] = strconv.FormatBool(cfg.Provision.IsEnabled())
 	m["devtools"] = strconv.FormatBool(cfg.Provision.DevToolsEnabled())
@@ -110,12 +103,51 @@ func sandboxConfig() map[string]string {
 	if len(cfg.Defaults.DNS) > 0 {
 		m["dns"] = strings.Join(cfg.Defaults.DNS, ",")
 	}
+
+	// Backend-specific keys.
+	switch cfg.Backend {
+	case "truenas":
+		m["host"] = cfg.TrueNAS.Host
+		m["api_key"] = cfg.TrueNAS.APIKey
+		if cfg.TrueNAS.Port != 0 {
+			m["port"] = strconv.Itoa(cfg.TrueNAS.Port)
+		}
+		if cfg.TrueNAS.Username != "" {
+			m["username"] = cfg.TrueNAS.Username
+		}
+		if cfg.TrueNAS.InsecureSkipVerify != nil {
+			m["insecure"] = strconv.FormatBool(*cfg.TrueNAS.InsecureSkipVerify)
+		}
+		if cfg.Checkpoint.DatasetPrefix != "" {
+			m["dataset_prefix"] = cfg.Checkpoint.DatasetPrefix
+		}
+	case "incus":
+		if cfg.Incus.Socket != "" {
+			m["socket"] = cfg.Incus.Socket
+		}
+		if cfg.Incus.Remote != "" {
+			m["remote"] = cfg.Incus.Remote
+		}
+		if cfg.Incus.ClientCert != "" {
+			m["client_cert"] = cfg.Incus.ClientCert
+		}
+		if cfg.Incus.ClientKey != "" {
+			m["client_key"] = cfg.Incus.ClientKey
+		}
+		if cfg.Incus.ServerCert != "" {
+			m["server_cert"] = cfg.Incus.ServerCert
+		}
+		if cfg.Incus.Project != "" {
+			m["project"] = cfg.Incus.Project
+		}
+	}
+
 	return m
 }
 
 // openSandbox constructs a Sandbox from the loaded config.
 func openSandbox() (sandbox.Sandbox, error) {
-	return sandbox.Open("truenas", sandboxConfig())
+	return sandbox.Open(cfg.Backend, sandboxConfig())
 }
 
 // Execute runs the root command.

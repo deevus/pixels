@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/deevus/pixels/internal/provision"
-	"github.com/deevus/pixels/internal/ssh"
 )
 
 func init() {
@@ -25,16 +24,17 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	name := args[0]
 
-	ip, err := resolveRunningIP(ctx, name)
+	sb, err := openSandbox()
 	if err != nil {
 		return err
 	}
+	defer sb.Close()
 
-	if err := ssh.WaitReady(ctx, ip, 10*time.Second, nil); err != nil {
-		return fmt.Errorf("waiting for SSH: %w", err)
+	if err := sb.Ready(ctx, name, 10*time.Second); err != nil {
+		return fmt.Errorf("waiting for instance: %w", err)
 	}
 
-	runner := provision.NewRunner(ip, "root", cfg.SSH.Key)
+	runner := provision.NewRunnerWith(&sandboxExecutor{sb: sb, name: name})
 	raw, err := runner.List(ctx)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "No such file") {

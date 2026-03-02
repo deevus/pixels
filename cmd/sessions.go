@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/deevus/pixels/internal/provision"
-	"github.com/deevus/pixels/internal/ssh"
 )
 
 func init() {
@@ -24,17 +23,17 @@ func runSessions(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	name := args[0]
 
-	ip, err := resolveRunningIP(ctx, name)
+	sb, err := openSandbox()
 	if err != nil {
 		return err
 	}
+	defer sb.Close()
 
-	if err := ssh.WaitReady(ctx, ip, 30*time.Second, nil); err != nil {
-		return fmt.Errorf("waiting for SSH: %w", err)
+	if err := sb.Ready(ctx, name, 30*time.Second); err != nil {
+		return fmt.Errorf("waiting for instance: %w", err)
 	}
 
-	cc := ssh.ConnConfig{Host: ip, User: cfg.SSH.User, KeyPath: cfg.SSH.Key}
-	out, err := ssh.OutputQuiet(ctx, cc, []string{"unset XDG_RUNTIME_DIR && zmx list"})
+	out, err := sb.Output(ctx, name, []string{"sh", "-c", "unset XDG_RUNTIME_DIR && zmx list"})
 	if err != nil {
 		return fmt.Errorf("zmx not available on %s", name)
 	}
