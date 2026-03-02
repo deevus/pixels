@@ -81,7 +81,7 @@ func (t *TrueNAS) SetEgressMode(ctx context.Context, name string, mode sandbox.E
 		}
 
 		// Install nftables and resolve domains via SSH.
-		code, err := t.ssh.ExecQuiet(ctx, cc, []string{"apt-get install -y nftables >/dev/null 2>&1"})
+		code, err := t.ssh.ExecQuiet(ctx, cc, []string{"DEBIAN_FRONTEND=noninteractive apt-get install -y -o Dpkg::Options::=--force-confold nftables >/dev/null 2>&1"})
 		if err != nil {
 			return fmt.Errorf("installing nftables: %w", err)
 		}
