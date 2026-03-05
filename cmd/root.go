@@ -79,6 +79,9 @@ func sandboxConfig() map[string]string {
 	if cfg.SSH.Key != "" {
 		m["ssh_key"] = cfg.SSH.Key
 	}
+	if cfg.SSH.StrictHostKeysEnabled() {
+		m["ssh_known_hosts"] = config.KnownHostsPath()
+	}
 	m["provision"] = strconv.FormatBool(cfg.Provision.IsEnabled())
 	m["devtools"] = strconv.FormatBool(cfg.Provision.DevToolsEnabled())
 	if cfg.Network.Egress != "" {

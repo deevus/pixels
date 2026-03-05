@@ -122,8 +122,10 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 
 	// Wait for SSH readiness.
 	if ip != "" {
-		cc := ssh.ConnConfig{Host: ip, User: t.cfg.sshUser, KeyPath: t.cfg.sshKey}
-		_ = t.ssh.WaitReady(ctx, cc.Host, 90*time.Second, nil)
+		// Remove stale known_hosts entries — the container was just created.
+		ssh.RemoveKnownHost(t.cfg.knownHosts, ip)
+		ssh.RemoveKnownHost(t.cfg.knownHosts, full)
+		_ = t.ssh.WaitReady(ctx, full, 90*time.Second, nil)
 	}
 
 	return &sandbox.Instance{
@@ -177,7 +179,10 @@ func (t *TrueNAS) Start(ctx context.Context, name string) error {
 
 	ip := ipFromAliases(inst.Aliases)
 	if ip != "" {
-		_ = t.ssh.WaitReady(ctx, ip, 30*time.Second, nil)
+		// Remove stale known_hosts entries — host key may differ after restart.
+		ssh.RemoveKnownHost(t.cfg.knownHosts, ip)
+		ssh.RemoveKnownHost(t.cfg.knownHosts, full)
+		_ = t.ssh.WaitReady(ctx, full, 30*time.Second, nil)
 	}
 	return nil
 }
@@ -199,12 +204,25 @@ func (t *TrueNAS) Delete(ctx context.Context, name string) error {
 	// Best-effort stop.
 	_ = t.client.Virt.StopInstance(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30})
 
+	// Resolve IP before deletion so we can clean up the known_hosts entry.
+	inst, _ := t.client.Virt.GetInstance(ctx, full)
+	var ip string
+	if inst != nil {
+		ip = ipFromAliases(inst.Aliases)
+	}
+
 	// Retry delete (Incus storage release timing).
 	if err := retry.Do(ctx, 3, 2*time.Second, func(ctx context.Context) error {
 		return t.client.Virt.DeleteInstance(ctx, full)
 	}); err != nil {
 		return fmt.Errorf("deleting %s: %w", name, err)
 	}
+
+	// Clean up known_hosts entries for the now-dead container.
+	if ip != "" {
+		ssh.RemoveKnownHost(t.cfg.knownHosts, ip)
+	}
+	ssh.RemoveKnownHost(t.cfg.knownHosts, full)
 	return nil
 }
 
@@ -279,7 +297,10 @@ func (t *TrueNAS) RestoreSnapshot(ctx context.Context, name, label string) error
 
 	ip := ipFromAliases(inst.Aliases)
 	if ip != "" {
-		_ = t.ssh.WaitReady(ctx, ip, 30*time.Second, nil)
+		// Remove stale known_hosts entries — snapshot restore changes the host key.
+		ssh.RemoveKnownHost(t.cfg.knownHosts, ip)
+		ssh.RemoveKnownHost(t.cfg.knownHosts, full)
+		_ = t.ssh.WaitReady(ctx, full, 30*time.Second, nil)
 	}
 	return nil
 }

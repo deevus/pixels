@@ -20,26 +20,25 @@ func unprefixed(name string) string {
 	return strings.TrimPrefix(name, containerPrefix)
 }
 
-// resolveRunningIP returns the IP of a running container via the API.
-func (t *TrueNAS) resolveRunningIP(ctx context.Context, name string) (string, error) {
+// ensureRunning verifies the container is running and has a network address.
+func (t *TrueNAS) ensureRunning(ctx context.Context, name string) error {
 	full := prefixed(name)
 
 	instance, err := t.client.Virt.GetInstance(ctx, full)
 	if err != nil {
-		return "", fmt.Errorf("looking up %s: %w", name, err)
+		return fmt.Errorf("looking up %s: %w", name, err)
 	}
 	if instance == nil {
-		return "", fmt.Errorf("instance %q not found", name)
+		return fmt.Errorf("instance %q not found", name)
 	}
 	if instance.Status != "RUNNING" {
-		return "", fmt.Errorf("instance %q is %s — start it first", name, instance.Status)
+		return fmt.Errorf("instance %q is %s — start it first", name, instance.Status)
 	}
 
-	ip := ipFromAliases(instance.Aliases)
-	if ip == "" {
-		return "", fmt.Errorf("no IP address for %s", name)
+	if ipFromAliases(instance.Aliases) == "" {
+		return fmt.Errorf("no IP address for %s", name)
 	}
-	return ip, nil
+	return nil
 }
 
 // ipFromAliases extracts the first IPv4 address from a VirtInstance's aliases.

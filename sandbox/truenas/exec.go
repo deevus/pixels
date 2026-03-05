@@ -15,8 +15,7 @@ import (
 // custom Stdin/Stdout/Stderr, it builds a custom exec.Cmd using ssh.Args().
 // Otherwise it delegates to ssh.Exec.
 func (t *TrueNAS) Run(ctx context.Context, name string, opts sandbox.ExecOpts) (int, error) {
-	ip, err := t.resolveRunningIP(ctx, name)
-	if err != nil {
+	if err := t.ensureRunning(ctx, name); err != nil {
 		return 1, err
 	}
 
@@ -26,10 +25,11 @@ func (t *TrueNAS) Run(ctx context.Context, name string, opts sandbox.ExecOpts) (
 	}
 
 	cc := ssh.ConnConfig{
-		Host:    ip,
-		User:    user,
-		KeyPath: t.cfg.sshKey,
-		Env:     envToMap(opts.Env),
+		Host:           prefixed(name),
+		User:           user,
+		KeyPath:        t.cfg.sshKey,
+		Env:            envToMap(opts.Env),
+		KnownHostsFile: t.cfg.knownHosts,
 	}
 
 	hasCustomIO := opts.Stdin != nil || opts.Stdout != nil || opts.Stderr != nil
@@ -54,29 +54,29 @@ func (t *TrueNAS) Run(ctx context.Context, name string, opts sandbox.ExecOpts) (
 
 // Output executes a command and returns its combined stdout.
 func (t *TrueNAS) Output(ctx context.Context, name string, cmd []string) ([]byte, error) {
-	ip, err := t.resolveRunningIP(ctx, name)
-	if err != nil {
+	if err := t.ensureRunning(ctx, name); err != nil {
 		return nil, err
 	}
 	cc := ssh.ConnConfig{
-		Host:    ip,
-		User:    t.cfg.sshUser,
-		KeyPath: t.cfg.sshKey,
+		Host:           prefixed(name),
+		User:           t.cfg.sshUser,
+		KeyPath:        t.cfg.sshKey,
+		KnownHostsFile: t.cfg.knownHosts,
 	}
 	return t.ssh.OutputQuiet(ctx, cc, cmd)
 }
 
 // Console attaches an interactive console session.
 func (t *TrueNAS) Console(ctx context.Context, name string, opts sandbox.ConsoleOpts) error {
-	ip, err := t.resolveRunningIP(ctx, name)
-	if err != nil {
+	if err := t.ensureRunning(ctx, name); err != nil {
 		return err
 	}
 	cc := ssh.ConnConfig{
-		Host:    ip,
-		User:    t.cfg.sshUser,
-		KeyPath: t.cfg.sshKey,
-		Env:     envToMap(opts.Env),
+		Host:           prefixed(name),
+		User:           t.cfg.sshUser,
+		KeyPath:        t.cfg.sshKey,
+		Env:            envToMap(opts.Env),
+		KnownHostsFile: t.cfg.knownHosts,
 	}
 	remoteCmd := strings.Join(opts.RemoteCmd, " ")
 	return ssh.Console(cc, remoteCmd)
@@ -85,19 +85,20 @@ func (t *TrueNAS) Console(ctx context.Context, name string, opts sandbox.Console
 // Ready waits until the instance is reachable via SSH. If key auth fails,
 // it pushes the current machine's SSH public key via the TrueNAS file API.
 func (t *TrueNAS) Ready(ctx context.Context, name string, timeout time.Duration) error {
-	ip, err := t.resolveRunningIP(ctx, name)
-	if err != nil {
+	if err := t.ensureRunning(ctx, name); err != nil {
 		return err
 	}
-	if err := t.ssh.WaitReady(ctx, ip, timeout, nil); err != nil {
+	host := prefixed(name)
+	if err := t.ssh.WaitReady(ctx, host, timeout, nil); err != nil {
 		return err
 	}
 
 	// Test key auth and push the key if it fails.
 	cc := ssh.ConnConfig{
-		Host:    ip,
-		User:    t.cfg.sshUser,
-		KeyPath: t.cfg.sshKey,
+		Host:           host,
+		User:           t.cfg.sshUser,
+		KeyPath:        t.cfg.sshKey,
+		KnownHostsFile: t.cfg.knownHosts,
 	}
 	if err := ssh.TestAuth(ctx, cc); err != nil {
 		pubKey := readSSHPubKey(t.cfg.sshKey)

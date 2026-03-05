@@ -8,16 +8,15 @@ import (
 	tnapi "github.com/deevus/truenas-go"
 )
 
-func TestResolveRunningIP(t *testing.T) {
+func TestEnsureRunning(t *testing.T) {
 	tests := []struct {
 		name     string
 		instance *tnapi.VirtInstance
 		getErr   error
-		wantIP   string
 		wantErr  string
 	}{
 		{
-			name: "API lookup",
+			name: "running with IP",
 			instance: &tnapi.VirtInstance{
 				Name:   "px-test",
 				Status: "RUNNING",
@@ -25,7 +24,6 @@ func TestResolveRunningIP(t *testing.T) {
 					{Type: "INET", Address: "192.168.1.50"},
 				},
 			},
-			wantIP: "192.168.1.50",
 		},
 		{
 			name:    "API error",
@@ -72,7 +70,7 @@ func TestResolveRunningIP(t *testing.T) {
 				},
 			}
 
-			ip, err := tn.resolveRunningIP(context.Background(), "test")
+			err := tn.ensureRunning(context.Background(), "test")
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -84,9 +82,6 @@ func TestResolveRunningIP(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
-			}
-			if ip != tt.wantIP {
-				t.Errorf("ip = %q, want %q", ip, tt.wantIP)
 			}
 		})
 	}

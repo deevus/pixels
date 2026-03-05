@@ -55,8 +55,18 @@ type Defaults struct {
 }
 
 type SSH struct {
-	User string `toml:"user" env:"PIXELS_SSH_USER"`
-	Key  string `toml:"key"  env:"PIXELS_SSH_KEY"`
+	User           string `toml:"user"             env:"PIXELS_SSH_USER"`
+	Key            string `toml:"key"              env:"PIXELS_SSH_KEY"`
+	StrictHostKeys *bool  `toml:"strict_host_keys" env:"PIXELS_SSH_STRICT_HOST_KEYS"`
+}
+
+// StrictHostKeysEnabled returns whether SSH host key verification is enabled.
+// Defaults to true when not explicitly set.
+func (s *SSH) StrictHostKeysEnabled() bool {
+	if s.StrictHostKeys == nil {
+		return true
+	}
+	return *s.StrictHostKeys
 }
 
 type Checkpoint struct {
@@ -201,6 +211,12 @@ func (t *TrueNAS) InsecureSkipVerifyValue() bool {
 		return false
 	}
 	return *t.InsecureSkipVerify
+}
+
+// KnownHostsPath returns the path to the pixels-managed SSH known_hosts file.
+func KnownHostsPath() string {
+	dir := filepath.Dir(configPath())
+	return filepath.Join(dir, "known_hosts")
 }
 
 func expandHome(path string) string {

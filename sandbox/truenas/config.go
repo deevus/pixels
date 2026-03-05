@@ -24,8 +24,9 @@ type tnConfig struct {
 	nicType string
 	parent  string
 
-	sshUser string
-	sshKey  string
+	sshUser    string
+	sshKey     string
+	knownHosts string
 
 	datasetPrefix string
 
@@ -108,6 +109,7 @@ func parseCfg(m map[string]string) (*tnConfig, error) {
 	if v := m["ssh_key"]; v != "" {
 		c.sshKey = v
 	}
+	c.knownHosts = m["ssh_known_hosts"]
 
 	if v := m["dataset_prefix"]; v != "" {
 		c.datasetPrefix = v

@@ -29,7 +29,7 @@ func TestSSHArgs(t *testing.T) {
 		}
 	})
 
-	t.Run("uses os.DevNull for UserKnownHostsFile", func(t *testing.T) {
+	t.Run("uses os.DevNull for UserKnownHostsFile when no KnownHostsFile", func(t *testing.T) {
 		args := Args(ConnConfig{Host: "10.0.0.1", User: "pixel"})
 		want := "UserKnownHostsFile=" + os.DevNull
 		found := false
@@ -41,6 +41,47 @@ func TestSSHArgs(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("sshArgs should contain %q, got %v", want, args)
+		}
+		// Also verify StrictHostKeyChecking=no in this mode.
+		foundStrict := false
+		for _, a := range args {
+			if a == "StrictHostKeyChecking=no" {
+				foundStrict = true
+			}
+		}
+		if !foundStrict {
+			t.Errorf("expected StrictHostKeyChecking=no, got %v", args)
+		}
+	})
+
+	t.Run("accept-new with KnownHostsFile", func(t *testing.T) {
+		khFile := "/tmp/pixels-test-known-hosts"
+		args := Args(ConnConfig{Host: "10.0.0.1", User: "pixel", KnownHostsFile: khFile})
+
+		// Should use accept-new instead of no.
+		foundAcceptNew := false
+		for _, a := range args {
+			if a == "StrictHostKeyChecking=accept-new" {
+				foundAcceptNew = true
+			}
+			if a == "StrictHostKeyChecking=no" {
+				t.Error("should not use StrictHostKeyChecking=no when KnownHostsFile is set")
+			}
+		}
+		if !foundAcceptNew {
+			t.Errorf("expected StrictHostKeyChecking=accept-new, got %v", args)
+		}
+
+		// Should use the provided known hosts file.
+		want := "UserKnownHostsFile=" + khFile
+		found := false
+		for _, a := range args {
+			if a == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("expected %q, got %v", want, args)
 		}
 	})
 
@@ -109,6 +150,44 @@ func TestSSHArgs(t *testing.T) {
 			if strings.HasPrefix(a, "SetEnv=") {
 				t.Errorf("unexpected SetEnv arg %q with empty env", a)
 			}
+		}
+	})
+}
+
+func TestRemoveKnownHost(t *testing.T) {
+	t.Run("no-op when file is empty string", func(t *testing.T) {
+		if err := RemoveKnownHost("", "10.0.0.1"); err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+	})
+
+	t.Run("no-op when file does not exist", func(t *testing.T) {
+		if err := RemoveKnownHost("/tmp/nonexistent-known-hosts-file", "10.0.0.1"); err != nil {
+			t.Errorf("expected no error for missing file, got %v", err)
+		}
+	})
+
+	t.Run("removes entry from existing file", func(t *testing.T) {
+		dir := t.TempDir()
+		khFile := dir + "/known_hosts"
+		content := "10.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey\n10.0.0.2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtherKey\n"
+		if err := os.WriteFile(khFile, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := RemoveKnownHost(khFile, "10.0.0.1"); err != nil {
+			t.Fatalf("RemoveKnownHost: %v", err)
+		}
+
+		data, err := os.ReadFile(khFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "10.0.0.1") {
+			t.Errorf("expected 10.0.0.1 to be removed, file contains: %s", data)
+		}
+		if !strings.Contains(string(data), "10.0.0.2") {
+			t.Errorf("expected 10.0.0.2 to remain, file contains: %s", data)
 		}
 	})
 }
