@@ -4,6 +4,9 @@ package truenas
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"os"
 
 	"github.com/deevus/pixels/sandbox"
 )
@@ -23,6 +26,13 @@ type TrueNAS struct {
 	client *Client
 	cfg    *tnConfig
 	ssh    sshRunner
+	warn   io.Writer
+}
+
+func (t *TrueNAS) warnf(format string, a ...any) {
+	if t.warn != nil {
+		fmt.Fprintf(t.warn, "pixels: "+format+"\n", a...)
+	}
 }
 
 // New creates a TrueNAS sandbox backend from a flat config map.
@@ -41,6 +51,7 @@ func New(cfg map[string]string) (*TrueNAS, error) {
 		client: client,
 		cfg:    c,
 		ssh:    realSSH{},
+		warn:   os.Stderr,
 	}, nil
 }
 
@@ -54,6 +65,7 @@ func NewForTest(client *Client, ssh sshRunner, cfg map[string]string) (*TrueNAS,
 		client: client,
 		cfg:    c,
 		ssh:    ssh,
+		warn:   os.Stderr,
 	}, nil
 }
 

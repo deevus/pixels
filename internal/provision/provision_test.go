@@ -16,7 +16,7 @@ func TestZmxCmd(t *testing.T) {
 }
 
 func TestNewRunner(t *testing.T) {
-	r := NewRunner("10.0.0.1", "root", "/tmp/key")
+	r := NewRunner("10.0.0.1", "root", "/tmp/key", "/tmp/known_hosts")
 	if r.Host != "10.0.0.1" {
 		t.Errorf("Host = %q, want %q", r.Host, "10.0.0.1")
 	}

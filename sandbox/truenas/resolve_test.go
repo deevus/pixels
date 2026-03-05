@@ -70,7 +70,7 @@ func TestEnsureRunning(t *testing.T) {
 				},
 			}
 
-			err := tn.ensureRunning(context.Background(), "test")
+			inst, err := tn.ensureRunning(context.Background(), "test")
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -82,6 +82,9 @@ func TestEnsureRunning(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+			if inst == nil {
+				t.Fatal("expected non-nil instance")
 			}
 		})
 	}

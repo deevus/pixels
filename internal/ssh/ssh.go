@@ -1,6 +1,7 @@
 package ssh
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,18 +9,32 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	gossh "golang.org/x/crypto/ssh"
 )
 
 // ConnConfig holds the parameters for an SSH connection.
+// Use NewConnConfig to construct — it ensures secure defaults.
 type ConnConfig struct {
 	Host           string
 	User           string
 	KeyPath        string
 	Env            map[string]string // optional, for SetEnv forwarding
-	KnownHostsFile string            // when set, uses accept-new host key verification
+	KnownHostsPath string            // path to known_hosts file for accept-new verification
+}
+
+// NewConnConfig creates a ConnConfig with the given parameters.
+func NewConnConfig(host, user, keyPath, knownHostsPath string) ConnConfig {
+	return ConnConfig{
+		Host:           host,
+		User:           user,
+		KeyPath:        keyPath,
+		KnownHostsPath: knownHostsPath,
+	}
 }
 
 // WaitReady polls the host's SSH port until it accepts connections or the timeout expires.
@@ -116,22 +131,16 @@ func TestAuth(ctx context.Context, cc ConnConfig) error {
 // It is exported for use by callers that need to construct custom exec.Cmd
 // with non-standard Stdin/Stdout/Stderr (e.g. sandbox backends).
 func Args(cc ConnConfig) []string {
-	var args []string
-	if cc.KnownHostsFile != "" {
-		args = []string{
-			"-o", "StrictHostKeyChecking=accept-new",
-			"-o", "UserKnownHostsFile=" + cc.KnownHostsFile,
-		}
-	} else {
-		args = []string{
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=" + os.DevNull,
-		}
+	knownHosts := cc.KnownHostsPath
+	if knownHosts == "" {
+		knownHosts = defaultKnownHostsPath()
 	}
-	args = append(args,
+	args := []string{
+		"-o", "StrictHostKeyChecking=accept-new",
+		"-o", "UserKnownHostsFile=" + knownHosts,
 		"-o", "PasswordAuthentication=no",
 		"-o", "LogLevel=ERROR",
-	)
+	}
 	if cc.KeyPath != "" {
 		args = append(args, "-i", cc.KeyPath)
 	}
@@ -164,18 +173,66 @@ func Args(cc ConnConfig) []string {
 // RemoveKnownHost removes all entries for the given host from the known_hosts
 // file. This is used to clean up stale entries when containers are
 // created, destroyed, or restored from snapshots. It is a no-op if the
-// known_hosts file does not exist.
-func RemoveKnownHost(knownHostsFile, host string) error {
-	if knownHostsFile == "" {
+// known_hosts file does not exist or the path is empty.
+func RemoveKnownHost(knownHostsPath, host string) error {
+	if knownHostsPath == "" || host == "" {
 		return nil
 	}
-	if _, err := os.Stat(knownHostsFile); errors.Is(err, os.ErrNotExist) {
+	data, err := os.ReadFile(knownHostsPath)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	cmd := exec.Command("ssh-keygen", "-R", host, "-f", knownHostsFile)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	return cmd.Run()
+	if err != nil {
+		return fmt.Errorf("reading known_hosts: %w", err)
+	}
+
+	var kept []byte
+	rest := data
+	for len(rest) > 0 {
+		// Find the next line boundary to preserve the raw line (including newline).
+		end := bytes.IndexByte(rest, '\n')
+		var rawLine []byte
+		if end == -1 {
+			rawLine = rest
+			rest = nil
+		} else {
+			rawLine = rest[:end+1]
+			rest = rest[end+1:]
+		}
+
+		// Try to parse the line as a known_hosts entry.
+		_, hosts, _, _, _, parseErr := gossh.ParseKnownHosts(rawLine)
+		if parseErr != nil {
+			// Not a valid entry (comment, blank line) — keep it.
+			kept = append(kept, rawLine...)
+			continue
+		}
+
+		// Check if this entry matches the host to remove.
+		match := false
+		for _, h := range hosts {
+			if h == host {
+				match = true
+				break
+			}
+		}
+		if !match {
+			kept = append(kept, rawLine...)
+		}
+	}
+
+	return os.WriteFile(knownHostsPath, kept, 0o600)
+}
+
+// defaultKnownHostsPath returns the default known_hosts path in the pixels
+// config directory. This ensures Args() is always secure even if
+// KnownHostsPath is not explicitly set on ConnConfig.
+func defaultKnownHostsPath() string {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return filepath.Join(dir, "pixels", "known_hosts")
+	}
+	dir, _ := os.UserConfigDir()
+	return filepath.Join(dir, "pixels", "known_hosts")
 }
 
 // consoleArgs builds SSH arguments for an interactive console session.

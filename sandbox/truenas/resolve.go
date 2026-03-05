@@ -20,25 +20,26 @@ func unprefixed(name string) string {
 	return strings.TrimPrefix(name, containerPrefix)
 }
 
-// ensureRunning verifies the container is running and has a network address.
-func (t *TrueNAS) ensureRunning(ctx context.Context, name string) error {
+// ensureRunning verifies the container is running and has a network address,
+// returning the instance for callers that need its metadata (e.g. IP).
+func (t *TrueNAS) ensureRunning(ctx context.Context, name string) (*tnapi.VirtInstance, error) {
 	full := prefixed(name)
 
 	instance, err := t.client.Virt.GetInstance(ctx, full)
 	if err != nil {
-		return fmt.Errorf("looking up %s: %w", name, err)
+		return nil, fmt.Errorf("looking up %s: %w", name, err)
 	}
 	if instance == nil {
-		return fmt.Errorf("instance %q not found", name)
+		return nil, fmt.Errorf("instance %q not found", name)
 	}
 	if instance.Status != "RUNNING" {
-		return fmt.Errorf("instance %q is %s — start it first", name, instance.Status)
+		return nil, fmt.Errorf("instance %q is %s — start it first", name, instance.Status)
 	}
 
 	if ipFromAliases(instance.Aliases) == "" {
-		return fmt.Errorf("no IP address for %s", name)
+		return nil, fmt.Errorf("no IP address for %s", name)
 	}
-	return nil
+	return instance, nil
 }
 
 // ipFromAliases extracts the first IPv4 address from a VirtInstance's aliases.
