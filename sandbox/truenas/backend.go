@@ -16,6 +16,23 @@ import (
 	"github.com/deevus/pixels/sandbox"
 )
 
+// clearAndRefreshHostKey removes stale known_hosts entries for both IP and hostname,
+// then waits for SSH readiness.
+func (t *TrueNAS) clearAndRefreshHostKey(ctx context.Context, name, ip, hostname string, timeout time.Duration) {
+	t.clearKnownHosts(ip, hostname)
+	if err := t.ssh.WaitReady(ctx, hostname, timeout, nil); err != nil {
+		t.warnf("ssh wait %s: %v", name, err)
+	}
+}
+
+// clearKnownHosts removes known_hosts entries for both IP and hostname.
+func (t *TrueNAS) clearKnownHosts(ip, hostname string) {
+	if ip != "" {
+		ssh.RemoveKnownHost(t.cfg.knownHosts, ip)
+	}
+	ssh.RemoveKnownHost(t.cfg.knownHosts, hostname)
+}
+
 // Create creates a new container instance with the full provisioning flow:
 // NIC resolution, instance creation, provisioning, restart, IP poll, SSH wait.
 // When opts.Bare is true, only the instance is created (no provisioning or SSH wait).
@@ -121,12 +138,7 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 
 	// Wait for SSH readiness.
 	if ip != "" {
-		// Remove stale known_hosts entries — the container was just created.
-		ssh.RemoveKnownHost(t.cfg.knownHosts, ip)
-		ssh.RemoveKnownHost(t.cfg.knownHosts, full)
-		if err := t.ssh.WaitReady(ctx, full, 90*time.Second, nil); err != nil {
-			t.warnf("ssh wait %s: %v", name, err)
-		}
+		t.clearAndRefreshHostKey(ctx, name, ip, full, 90*time.Second)
 	}
 
 	return &sandbox.Instance{
@@ -180,12 +192,7 @@ func (t *TrueNAS) Start(ctx context.Context, name string) error {
 
 	ip := ipFromAliases(inst.Aliases)
 	if ip != "" {
-		// Remove stale known_hosts entries — host key may differ after restart.
-		ssh.RemoveKnownHost(t.cfg.knownHosts, ip)
-		ssh.RemoveKnownHost(t.cfg.knownHosts, full)
-		if err := t.ssh.WaitReady(ctx, full, 30*time.Second, nil); err != nil {
-			t.warnf("ssh wait %s: %v", name, err)
-		}
+		t.clearAndRefreshHostKey(ctx, name, ip, full, 30*time.Second)
 	}
 	return nil
 }
@@ -222,10 +229,7 @@ func (t *TrueNAS) Delete(ctx context.Context, name string) error {
 	}
 
 	// Clean up known_hosts entries for the now-dead container.
-	if ip != "" {
-		ssh.RemoveKnownHost(t.cfg.knownHosts, ip)
-	}
-	ssh.RemoveKnownHost(t.cfg.knownHosts, full)
+	t.clearKnownHosts(ip, full)
 	return nil
 }
 
@@ -300,12 +304,7 @@ func (t *TrueNAS) RestoreSnapshot(ctx context.Context, name, label string) error
 
 	ip := ipFromAliases(inst.Aliases)
 	if ip != "" {
-		// Remove stale known_hosts entries — snapshot restore changes the host key.
-		ssh.RemoveKnownHost(t.cfg.knownHosts, ip)
-		ssh.RemoveKnownHost(t.cfg.knownHosts, full)
-		if err := t.ssh.WaitReady(ctx, full, 30*time.Second, nil); err != nil {
-			t.warnf("ssh wait %s: %v", name, err)
-		}
+		t.clearAndRefreshHostKey(ctx, name, ip, full, 30*time.Second)
 	}
 	return nil
 }
