@@ -9,10 +9,11 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/deevus/pixels/internal/config"
 )
 
 // ConnConfig holds the parameters for an SSH connection.
@@ -131,7 +132,7 @@ func TestAuth(ctx context.Context, cc ConnConfig) error {
 func Args(cc ConnConfig) []string {
 	knownHosts := cc.KnownHostsPath
 	if knownHosts == "" {
-		knownHosts = defaultKnownHostsPath()
+		knownHosts = config.KnownHostsPath()
 	}
 	args := []string{
 		"-o", "StrictHostKeyChecking=accept-new",
@@ -195,16 +196,6 @@ func RemoveKnownHost(knownHostsPath, host string) error {
 	return os.WriteFile(knownHostsPath, kept, 0o600)
 }
 
-// defaultKnownHostsPath returns the default known_hosts path in the pixels
-// config directory. This ensures Args() is always secure even if
-// KnownHostsPath is not explicitly set on ConnConfig.
-func defaultKnownHostsPath() string {
-	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
-		return filepath.Join(dir, "pixels", "known_hosts")
-	}
-	dir, _ := os.UserConfigDir()
-	return filepath.Join(dir, "pixels", "known_hosts")
-}
 
 // consoleArgs builds SSH arguments for an interactive console session.
 // When remoteCmd is non-empty, -t is inserted to force PTY allocation
