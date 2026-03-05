@@ -13,8 +13,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	gossh "golang.org/x/crypto/ssh"
 )
 
 // ConnConfig holds the parameters for an SSH connection.
@@ -186,38 +184,11 @@ func RemoveKnownHost(knownHostsPath, host string) error {
 		return fmt.Errorf("reading known_hosts: %w", err)
 	}
 
+	prefix := []byte(host + " ")
 	var kept []byte
-	rest := data
-	for len(rest) > 0 {
-		// Find the next line boundary to preserve the raw line (including newline).
-		end := bytes.IndexByte(rest, '\n')
-		var rawLine []byte
-		if end == -1 {
-			rawLine = rest
-			rest = nil
-		} else {
-			rawLine = rest[:end+1]
-			rest = rest[end+1:]
-		}
-
-		// Try to parse the line as a known_hosts entry.
-		_, hosts, _, _, _, parseErr := gossh.ParseKnownHosts(rawLine)
-		if parseErr != nil {
-			// Not a valid entry (comment, blank line) — keep it.
-			kept = append(kept, rawLine...)
-			continue
-		}
-
-		// Check if this entry matches the host to remove.
-		match := false
-		for _, h := range hosts {
-			if h == host {
-				match = true
-				break
-			}
-		}
-		if !match {
-			kept = append(kept, rawLine...)
+	for _, line := range bytes.SplitAfter(data, []byte("\n")) {
+		if !bytes.HasPrefix(line, prefix) {
+			kept = append(kept, line...)
 		}
 	}
 
