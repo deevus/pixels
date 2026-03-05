@@ -29,34 +29,28 @@ func TestSSHArgs(t *testing.T) {
 		}
 	})
 
-	t.Run("uses os.DevNull for UserKnownHostsFile when no KnownHostsFile", func(t *testing.T) {
+	t.Run("always uses accept-new even without explicit KnownHostsPath", func(t *testing.T) {
 		args := Args(ConnConfig{Host: "10.0.0.1", User: "pixel"})
-		want := "UserKnownHostsFile=" + os.DevNull
-		found := false
+		foundAcceptNew := false
 		for _, a := range args {
-			if a == want {
-				found = true
-				break
+			if a == "StrictHostKeyChecking=accept-new" {
+				foundAcceptNew = true
 			}
-		}
-		if !found {
-			t.Errorf("sshArgs should contain %q, got %v", want, args)
-		}
-		// Also verify StrictHostKeyChecking=no in this mode.
-		foundStrict := false
-		for _, a := range args {
 			if a == "StrictHostKeyChecking=no" {
-				foundStrict = true
+				t.Error("should never use StrictHostKeyChecking=no")
+			}
+			if strings.Contains(a, os.DevNull) {
+				t.Errorf("should never use DevNull for known hosts, got %q", a)
 			}
 		}
-		if !foundStrict {
-			t.Errorf("expected StrictHostKeyChecking=no, got %v", args)
+		if !foundAcceptNew {
+			t.Errorf("expected StrictHostKeyChecking=accept-new, got %v", args)
 		}
 	})
 
-	t.Run("accept-new with KnownHostsFile", func(t *testing.T) {
+	t.Run("accept-new with KnownHostsPath", func(t *testing.T) {
 		khFile := "/tmp/pixels-test-known-hosts"
-		args := Args(ConnConfig{Host: "10.0.0.1", User: "pixel", KnownHostsFile: khFile})
+		args := Args(ConnConfig{Host: "10.0.0.1", User: "pixel", KnownHostsPath: khFile})
 
 		// Should use accept-new instead of no.
 		foundAcceptNew := false
@@ -65,7 +59,7 @@ func TestSSHArgs(t *testing.T) {
 				foundAcceptNew = true
 			}
 			if a == "StrictHostKeyChecking=no" {
-				t.Error("should not use StrictHostKeyChecking=no when KnownHostsFile is set")
+				t.Error("should not use StrictHostKeyChecking=no when KnownHostsPath is set")
 			}
 		}
 		if !foundAcceptNew {
@@ -170,8 +164,10 @@ func TestRemoveKnownHost(t *testing.T) {
 	t.Run("removes entry from existing file", func(t *testing.T) {
 		dir := t.TempDir()
 		khFile := dir + "/known_hosts"
-		content := "10.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestKey\n10.0.0.2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtherKey\n"
-		if err := os.WriteFile(khFile, []byte(content), 0o600); err != nil {
+		// Use valid ssh-ed25519 key data (32 bytes base64-encoded with key type prefix).
+		key1 := "10.0.0.1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBVlGh5YxGBMp/DO3OjAHsMR0DVQS2DJnpOqaGP2MkNl\n"
+		key2 := "10.0.0.2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKxvLhGmlN1sdag3FISwEVfAGwC+v3+x0v6qIFNyGmNd\n"
+		if err := os.WriteFile(khFile, []byte(key1+key2), 0o600); err != nil {
 			t.Fatal(err)
 		}
 

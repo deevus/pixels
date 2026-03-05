@@ -93,8 +93,7 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 
 		if needsProvision {
 			if err := t.client.Provision(ctx, full, provOpts); err != nil {
-				// Non-fatal: continue without provisioning.
-				_ = err
+				t.warnf("provision %s: %v", name, err)
 			} else if pubKey != "" {
 				// Restart so rc.local runs on boot.
 				_ = t.client.Virt.StopInstance(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30})
@@ -125,7 +124,9 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 		// Remove stale known_hosts entries — the container was just created.
 		ssh.RemoveKnownHost(t.cfg.knownHosts, ip)
 		ssh.RemoveKnownHost(t.cfg.knownHosts, full)
-		_ = t.ssh.WaitReady(ctx, full, 90*time.Second, nil)
+		if err := t.ssh.WaitReady(ctx, full, 90*time.Second, nil); err != nil {
+			t.warnf("ssh wait %s: %v", name, err)
+		}
 	}
 
 	return &sandbox.Instance{
@@ -182,7 +183,9 @@ func (t *TrueNAS) Start(ctx context.Context, name string) error {
 		// Remove stale known_hosts entries — host key may differ after restart.
 		ssh.RemoveKnownHost(t.cfg.knownHosts, ip)
 		ssh.RemoveKnownHost(t.cfg.knownHosts, full)
-		_ = t.ssh.WaitReady(ctx, full, 30*time.Second, nil)
+		if err := t.ssh.WaitReady(ctx, full, 30*time.Second, nil); err != nil {
+			t.warnf("ssh wait %s: %v", name, err)
+		}
 	}
 	return nil
 }
@@ -300,7 +303,9 @@ func (t *TrueNAS) RestoreSnapshot(ctx context.Context, name, label string) error
 		// Remove stale known_hosts entries — snapshot restore changes the host key.
 		ssh.RemoveKnownHost(t.cfg.knownHosts, ip)
 		ssh.RemoveKnownHost(t.cfg.knownHosts, full)
-		_ = t.ssh.WaitReady(ctx, full, 30*time.Second, nil)
+		if err := t.ssh.WaitReady(ctx, full, 30*time.Second, nil); err != nil {
+			t.warnf("ssh wait %s: %v", name, err)
+		}
 	}
 	return nil
 }

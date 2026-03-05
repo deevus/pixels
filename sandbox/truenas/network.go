@@ -19,11 +19,11 @@ import (
 // script, safe-apt wrapper, restricted sudoers via the TrueNAS API, then
 // SSHes in to install nftables and resolve domains.
 func (t *TrueNAS) SetEgressMode(ctx context.Context, name string, mode sandbox.EgressMode) error {
-	if err := t.ensureRunning(ctx, name); err != nil {
+	if _, err := t.ensureRunning(ctx, name); err != nil {
 		return err
 	}
 	full := prefixed(name)
-	cc := ssh.ConnConfig{Host: full, User: "root", KeyPath: t.cfg.sshKey, KnownHostsFile: t.cfg.knownHosts}
+	cc := ssh.NewConnConfig(full, "root", t.cfg.sshKey, t.cfg.knownHosts)
 
 	switch mode {
 	case sandbox.EgressUnrestricted:
@@ -105,11 +105,11 @@ func (t *TrueNAS) SetEgressMode(ctx context.Context, name string, mode sandbox.E
 
 // AllowDomain adds a domain to the egress allowlist and re-resolves.
 func (t *TrueNAS) AllowDomain(ctx context.Context, name, domain string) error {
-	if err := t.ensureRunning(ctx, name); err != nil {
+	if _, err := t.ensureRunning(ctx, name); err != nil {
 		return err
 	}
 	full := prefixed(name)
-	cc := ssh.ConnConfig{Host: full, User: "root", KeyPath: t.cfg.sshKey, KnownHostsFile: t.cfg.knownHosts}
+	cc := ssh.NewConnConfig(full, "root", t.cfg.sshKey, t.cfg.knownHosts)
 
 	// Ensure egress infrastructure exists.
 	code, _ := t.ssh.ExecQuiet(ctx, cc, []string{"test -f /etc/pixels-egress-domains"})
@@ -150,11 +150,11 @@ func (t *TrueNAS) AllowDomain(ctx context.Context, name, domain string) error {
 
 // DenyDomain removes a domain from the egress allowlist and re-resolves.
 func (t *TrueNAS) DenyDomain(ctx context.Context, name, domain string) error {
-	if err := t.ensureRunning(ctx, name); err != nil {
+	if _, err := t.ensureRunning(ctx, name); err != nil {
 		return err
 	}
 	full := prefixed(name)
-	cc := ssh.ConnConfig{Host: full, User: "root", KeyPath: t.cfg.sshKey, KnownHostsFile: t.cfg.knownHosts}
+	cc := ssh.NewConnConfig(full, "root", t.cfg.sshKey, t.cfg.knownHosts)
 
 	out, err := t.ssh.OutputQuiet(ctx, cc, []string{"cat /etc/pixels-egress-domains"})
 	if err != nil {
@@ -187,10 +187,10 @@ func (t *TrueNAS) DenyDomain(ctx context.Context, name, domain string) error {
 
 // GetPolicy returns the current egress policy for an instance.
 func (t *TrueNAS) GetPolicy(ctx context.Context, name string) (*sandbox.Policy, error) {
-	if err := t.ensureRunning(ctx, name); err != nil {
+	if _, err := t.ensureRunning(ctx, name); err != nil {
 		return nil, err
 	}
-	cc := ssh.ConnConfig{Host: prefixed(name), User: "root", KeyPath: t.cfg.sshKey, KnownHostsFile: t.cfg.knownHosts}
+	cc := ssh.NewConnConfig(prefixed(name), "root", t.cfg.sshKey, t.cfg.knownHosts)
 
 	code, _ := t.ssh.ExecQuiet(ctx, cc, []string{"test -f /etc/pixels-egress-domains"})
 	if code != 0 {

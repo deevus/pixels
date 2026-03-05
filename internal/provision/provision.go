@@ -72,13 +72,13 @@ type Runner struct {
 }
 
 // NewRunner creates a Runner that executes commands over SSH.
-func NewRunner(host, user, keyPath string) *Runner {
+func NewRunner(host, user, keyPath, knownHostsPath string) *Runner {
 	return &Runner{
 		Host:    host,
 		User:    user,
 		KeyPath: keyPath,
 		exec: &sshExecutor{
-			cc: ssh.ConnConfig{Host: host, User: user, KeyPath: keyPath},
+			cc: ssh.NewConnConfig(host, user, keyPath, knownHostsPath),
 		},
 	}
 }
