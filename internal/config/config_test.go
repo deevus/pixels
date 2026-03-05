@@ -507,6 +507,78 @@ func TestConfigPathDefault(t *testing.T) {
 	}
 }
 
+func TestStrictHostKeysEnabled(t *testing.T) {
+	tests := []struct {
+		name string
+		val  *bool
+		want bool
+	}{
+		{"nil defaults to true", nil, true},
+		{"explicit true", boolPtr(true), true},
+		{"explicit false", boolPtr(false), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := SSH{StrictHostKeys: tt.val}
+			if got := s.StrictHostKeysEnabled(); got != tt.want {
+				t.Errorf("StrictHostKeysEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+func TestStrictHostKeysFromFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfgDir := filepath.Join(dir, "pixels")
+	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	content := `
+[ssh]
+strict_host_keys = false
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.SSH.StrictHostKeysEnabled() {
+		t.Error("StrictHostKeysEnabled() = true, want false (set in TOML)")
+	}
+}
+
+func TestStrictHostKeysEnvOverride(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("PIXELS_SSH_STRICT_HOST_KEYS", "false")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.SSH.StrictHostKeysEnabled() {
+		t.Error("StrictHostKeysEnabled() = true, want false (env override)")
+	}
+}
+
+func TestKnownHostsPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	got := KnownHostsPath()
+	want := filepath.Join(dir, "pixels", "known_hosts")
+	if got != want {
+		t.Errorf("KnownHostsPath() = %q, want %q", got, want)
+	}
+}
+
 func TestExpandHome(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
