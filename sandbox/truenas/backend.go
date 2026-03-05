@@ -94,12 +94,13 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 		steps := provision.Steps(t.cfg.egress, t.cfg.devtools)
 
 		provOpts := ProvisionOpts{
-			SSHPubKey:   pubKey,
-			DNS:         t.cfg.dns,
-			Env:         t.cfg.env,
-			DevTools:    t.cfg.devtools,
-			Egress:      t.cfg.egress,
-			EgressAllow: t.cfg.allow,
+			SSHPubKey:      pubKey,
+			DNS:            t.cfg.dns,
+			Env:            t.cfg.env,
+			EnvForwardKeys: t.cfg.envForwardKeys,
+			DevTools:       t.cfg.devtools,
+			Egress:         t.cfg.egress,
+			EgressAllow:    t.cfg.allow,
 		}
 		if len(steps) > 0 {
 			provOpts.ProvisionScript = provision.Script(steps)

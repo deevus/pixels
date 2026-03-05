@@ -171,6 +171,34 @@ func TestParseCfg(t *testing.T) {
 			cfg:     map[string]string{"host": "nas", "api_key": "k", "egress": "deny-all"},
 			wantErr: "invalid egress",
 		},
+		{
+			name: "env_forward_keys parsed",
+			cfg: map[string]string{
+				"host":              "nas.test",
+				"api_key":           "key",
+				"env_forward_keys":  "GITHUB_TOKEN,API_KEY",
+			},
+			check: func(t *testing.T, c *tnConfig) {
+				if len(c.envForwardKeys) != 2 {
+					t.Fatalf("envForwardKeys len = %d, want 2", len(c.envForwardKeys))
+				}
+				if c.envForwardKeys[0] != "GITHUB_TOKEN" || c.envForwardKeys[1] != "API_KEY" {
+					t.Errorf("envForwardKeys = %v", c.envForwardKeys)
+				}
+			},
+		},
+		{
+			name: "env_forward_keys empty",
+			cfg: map[string]string{
+				"host":    "nas.test",
+				"api_key": "key",
+			},
+			check: func(t *testing.T, c *tnConfig) {
+				if c.envForwardKeys != nil {
+					t.Errorf("envForwardKeys = %v, want nil", c.envForwardKeys)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

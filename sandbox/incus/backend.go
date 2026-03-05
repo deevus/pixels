@@ -166,7 +166,7 @@ func (i *Incus) provisionInstance(ctx context.Context, full string) error {
 	i.mkdir(full, "/home/pixel", 0o755)
 	i.mkdir(full, "/home/pixel/.ssh", 0o700)
 	i.mkdir(full, "/etc/systemd/resolved.conf.d", 0o755)
-	i.mkdir(full, "/etc/ssh/sshd_config.d", 0o755)
+
 	i.mkdir(full, "/etc/profile.d", 0o755)
 	i.mkdir(full, "/etc/sudoers.d", 0o755)
 
@@ -179,11 +179,6 @@ func (i *Incus) provisionInstance(ctx context.Context, full string) error {
 		if err := i.pushFile(full, "/etc/systemd/resolved.conf.d/pixels-dns.conf", []byte(conf.String()), 0o644); err != nil {
 			return fmt.Errorf("writing DNS config: %w", err)
 		}
-	}
-
-	// sshd AcceptEnv config.
-	if err := i.pushFile(full, "/etc/ssh/sshd_config.d/pixels.conf", []byte("AcceptEnv *\n"), 0o644); err != nil {
-		return fmt.Errorf("writing sshd config: %w", err)
 	}
 
 	// Shell profile.

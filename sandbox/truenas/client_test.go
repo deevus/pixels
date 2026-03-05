@@ -338,6 +338,25 @@ func TestProvision(t *testing.T) {
 			wantCalls: 2, // sshd config + profile.d
 		},
 		{
+			name: "env forward keys restrict AcceptEnv",
+			opts: ProvisionOpts{
+				SSHPubKey:      "ssh-ed25519 AAAA test@host",
+				EnvForwardKeys: []string{"API_KEY", "GITHUB_TOKEN"},
+			},
+			pool:      "tank",
+			wantCalls: 5, // sshd config + profile.d + root key + pixel key + rc.local
+			check: func(t *testing.T, calls []fsWriteCall) {
+				// sshd drop-in should list specific keys, not AcceptEnv *.
+				sshd := calls[0]
+				if !strings.Contains(sshd.content, "AcceptEnv API_KEY GITHUB_TOKEN") {
+					t.Errorf("sshd config = %q, want AcceptEnv with specific keys", sshd.content)
+				}
+				if strings.Contains(sshd.content, "AcceptEnv *") {
+					t.Error("sshd config should not contain AcceptEnv *")
+				}
+			},
+		},
+		{
 			name:      "global config error",
 			opts:      ProvisionOpts{SSHPubKey: "ssh-ed25519 AAAA"},
 			configErr: errors.New("api failure"),
@@ -578,13 +597,16 @@ func TestProvision(t *testing.T) {
 				idx++
 			}
 
-			// Check sshd AcceptEnv drop-in (always written).
+			// Check sshd drop-in (always written).
 			sshd := calls[idx]
 			if sshd.path != rootfs+"/etc/ssh/sshd_config.d/pixels.conf" {
 				t.Errorf("sshd config path = %q, want sshd drop-in", sshd.path)
 			}
-			if !strings.Contains(sshd.content, "AcceptEnv *") {
-				t.Error("sshd config missing AcceptEnv *")
+			if len(tt.opts.EnvForwardKeys) > 0 {
+				want := "AcceptEnv " + strings.Join(tt.opts.EnvForwardKeys, " ")
+				if !strings.Contains(sshd.content, want) {
+					t.Errorf("sshd config = %q, want %q", sshd.content, want)
+				}
 			}
 			idx++
 

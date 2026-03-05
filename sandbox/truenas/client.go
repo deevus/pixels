@@ -93,6 +93,7 @@ type ProvisionOpts struct {
 	SSHPubKey       string
 	DNS             []string          // nameservers (e.g. ["1.1.1.1", "8.8.8.8"])
 	Env             map[string]string // environment variables to inject into /etc/environment
+	EnvForwardKeys  []string          // env var names for sshd AcceptEnv restriction
 	DevTools        bool              // whether to install dev tools (mise, claude-code, codex, opencode)
 	Egress          string            // "unrestricted", "agent", or "allowlist"
 	EgressAllow     []string          // custom domains (merged into agent, standalone for allowlist)
@@ -137,15 +138,21 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		logf("Wrote DNS config (%d nameservers)", len(opts.DNS))
 	}
 
-	// Configure sshd to accept forwarded env vars via SSH SetEnv.
+	// Configure sshd to accept only the specific forwarded env var names.
 	sshdDropin := rootfs + "/etc/ssh/sshd_config.d/pixels.conf"
+	var sshdContent string
+	if len(opts.EnvForwardKeys) > 0 {
+		sshdContent = "AcceptEnv " + strings.Join(opts.EnvForwardKeys, " ") + "\n"
+	} else {
+		sshdContent = "# No env forwarding configured\n"
+	}
 	if err := c.Filesystem.WriteFile(ctx, sshdDropin, truenas.WriteFileParams{
-		Content: []byte("AcceptEnv *\n"),
+		Content: []byte(sshdContent),
 		Mode:    0o644,
 	}); err != nil {
 		return fmt.Errorf("writing sshd drop-in: %w", err)
 	}
-	logf("Wrote sshd AcceptEnv config")
+	logf("Wrote sshd config")
 
 	// Shell alias for detaching zmx sessions.
 	if err := c.Filesystem.WriteFile(ctx, rootfs+"/etc/profile.d/pixels.sh", truenas.WriteFileParams{

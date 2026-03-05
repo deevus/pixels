@@ -38,8 +38,7 @@ type incusCfg struct {
 	allow     []string
 	dns       []string
 
-	env        map[string]string
-	envForward map[string]string
+	env map[string]string
 }
 
 // parseCfg extracts an incusCfg from a flat key-value map.

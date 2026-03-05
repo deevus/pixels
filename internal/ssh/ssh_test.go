@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -92,7 +93,7 @@ func TestSSHArgs(t *testing.T) {
 		}
 	})
 
-	t.Run("SetEnv with env vars", func(t *testing.T) {
+	t.Run("SendEnv with env vars", func(t *testing.T) {
 		cc := ConnConfig{
 			Host: "10.0.0.1",
 			User: "pixel",
@@ -103,24 +104,27 @@ func TestSSHArgs(t *testing.T) {
 		}
 		args := Args(cc)
 
-		// All vars should be in a single SetEnv directive (space-separated,
-		// sorted by key), preceded by -o. Multiple -o SetEnv flags don't
-		// stack in OpenSSH — only the first takes effect.
-		want := "SetEnv=API_KEY=sk-secret GITHUB_TOKEN=ghp_abc123"
+		// SendEnv should contain only key names (sorted), no values.
+		// Values are read from the process environment by the SSH client.
+		want := "SendEnv=API_KEY GITHUB_TOKEN"
 		var found bool
 		for i, a := range args {
-			if strings.HasPrefix(a, "SetEnv=") {
+			if strings.HasPrefix(a, "SendEnv=") {
 				if i == 0 || args[i-1] != "-o" {
-					t.Errorf("SetEnv arg %q not preceded by -o", a)
+					t.Errorf("SendEnv arg %q not preceded by -o", a)
 				}
 				if a != want {
-					t.Errorf("SetEnv = %q, want %q", a, want)
+					t.Errorf("SendEnv = %q, want %q", a, want)
 				}
 				found = true
 			}
+			// Ensure no SetEnv (secrets in argv).
+			if strings.HasPrefix(a, "SetEnv=") {
+				t.Errorf("unexpected SetEnv arg %q — should use SendEnv", a)
+			}
 		}
 		if !found {
-			t.Error("SetEnv not found in args")
+			t.Error("SendEnv not found in args")
 		}
 
 		// user@host should still be last.
@@ -129,20 +133,20 @@ func TestSSHArgs(t *testing.T) {
 		}
 	})
 
-	t.Run("nil env produces no SetEnv", func(t *testing.T) {
+	t.Run("nil env produces no SendEnv", func(t *testing.T) {
 		args := Args(ConnConfig{Host: "10.0.0.1", User: "pixel"})
 		for _, a := range args {
-			if strings.HasPrefix(a, "SetEnv=") {
-				t.Errorf("unexpected SetEnv arg %q with nil env", a)
+			if strings.HasPrefix(a, "SendEnv=") {
+				t.Errorf("unexpected SendEnv arg %q with nil env", a)
 			}
 		}
 	})
 
-	t.Run("empty env produces no SetEnv", func(t *testing.T) {
+	t.Run("empty env produces no SendEnv", func(t *testing.T) {
 		args := Args(ConnConfig{Host: "10.0.0.1", User: "pixel", Env: map[string]string{}})
 		for _, a := range args {
-			if strings.HasPrefix(a, "SetEnv=") {
-				t.Errorf("unexpected SetEnv arg %q with empty env", a)
+			if strings.HasPrefix(a, "SendEnv=") {
+				t.Errorf("unexpected SendEnv arg %q with empty env", a)
 			}
 		}
 	})
@@ -253,15 +257,18 @@ func TestConsoleArgs(t *testing.T) {
 		}
 		args := consoleArgs(cc, "zmx attach build")
 
-		// Verify SetEnv is present.
-		var foundSetEnv bool
+		// Verify SendEnv is present (not SetEnv).
+		var foundSendEnv bool
 		for _, a := range args {
+			if strings.HasPrefix(a, "SendEnv=") {
+				foundSendEnv = true
+			}
 			if strings.HasPrefix(a, "SetEnv=") {
-				foundSetEnv = true
+				t.Errorf("unexpected SetEnv arg %q — should use SendEnv", a)
 			}
 		}
-		if !foundSetEnv {
-			t.Error("SetEnv not found in args")
+		if !foundSendEnv {
+			t.Error("SendEnv not found in args")
 		}
 
 		// Verify -t and command at end.
@@ -274,6 +281,51 @@ func TestConsoleArgs(t *testing.T) {
 		}
 		if last3[2] != "zmx attach build" {
 			t.Errorf("expected remote command, got %q", last3[2])
+		}
+	})
+}
+
+func TestEnvWithOverrides(t *testing.T) {
+	base := []string{"HOME=/home/user", "PATH=/usr/bin", "EXISTING=old"}
+
+	t.Run("overrides existing and adds new", func(t *testing.T) {
+		result := EnvWithOverrides(base, map[string]string{
+			"EXISTING": "new",
+			"NEW_VAR":  "value",
+		})
+
+		var foundExisting, foundNew bool
+		for _, e := range result {
+			if e == "EXISTING=new" {
+				foundExisting = true
+			}
+			if e == "NEW_VAR=value" {
+				foundNew = true
+			}
+			if e == "EXISTING=old" {
+				t.Error("old value should be overridden")
+			}
+		}
+		if !foundExisting {
+			t.Error("EXISTING not overridden")
+		}
+		if !foundNew {
+			t.Error("NEW_VAR not added")
+		}
+	})
+
+	t.Run("does not mutate base", func(t *testing.T) {
+		orig := slices.Clone(base)
+		_ = EnvWithOverrides(base, map[string]string{"EXISTING": "new"})
+		if !slices.Equal(base, orig) {
+			t.Error("base slice was mutated")
+		}
+	})
+
+	t.Run("nil overrides returns copy", func(t *testing.T) {
+		result := EnvWithOverrides(base, nil)
+		if !slices.Equal(result, base) {
+			t.Errorf("result = %v, want %v", result, base)
 		}
 	})
 }

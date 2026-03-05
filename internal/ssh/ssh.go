@@ -22,7 +22,7 @@ type ConnConfig struct {
 	Host           string
 	User           string
 	KeyPath        string
-	Env            map[string]string // optional, for SetEnv forwarding
+	Env            map[string]string // optional, for SendEnv forwarding
 	KnownHostsPath string            // path to known_hosts file for accept-new verification
 }
 
@@ -75,6 +75,7 @@ func Exec(ctx context.Context, cc ConnConfig, command []string) (int, error) {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	applyEnv(cmd, cc)
 
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
@@ -91,6 +92,7 @@ func Exec(ctx context.Context, cc ConnConfig, command []string) (int, error) {
 func ExecQuiet(ctx context.Context, cc ConnConfig, command []string) (int, error) {
 	args := append(Args(cc), command...)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
+	applyEnv(cmd, cc)
 
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
@@ -107,6 +109,7 @@ func Output(ctx context.Context, cc ConnConfig, command []string) ([]byte, error
 	args := append(Args(cc), command...)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Stderr = os.Stderr
+	applyEnv(cmd, cc)
 	return cmd.Output()
 }
 
@@ -115,6 +118,7 @@ func Output(ctx context.Context, cc ConnConfig, command []string) ([]byte, error
 func OutputQuiet(ctx context.Context, cc ConnConfig, command []string) ([]byte, error) {
 	args := append(Args(cc), command...)
 	cmd := exec.CommandContext(ctx, "ssh", args...)
+	applyEnv(cmd, cc)
 	return cmd.Output()
 }
 
@@ -123,7 +127,15 @@ func OutputQuiet(ctx context.Context, cc ConnConfig, command []string) ([]byte, 
 func TestAuth(ctx context.Context, cc ConnConfig) error {
 	args := append(Args(cc), "true")
 	cmd := exec.CommandContext(ctx, "ssh", args...)
+	applyEnv(cmd, cc)
 	return cmd.Run()
+}
+
+// applyEnv sets cmd.Env if the ConnConfig has env vars to forward via SendEnv.
+func applyEnv(cmd *exec.Cmd, cc ConnConfig) {
+	if len(cc.Env) > 0 {
+		cmd.Env = EnvWithOverrides(os.Environ(), cc.Env)
+	}
 }
 
 // Args builds the SSH command-line arguments for the given connection config.
@@ -145,28 +157,42 @@ func Args(cc ConnConfig) []string {
 	}
 
 	// Forward env vars via SSH protocol (requires AcceptEnv on server).
-	// All vars must be in a single SetEnv directive (multiple -o SetEnv
-	// flags don't stack in OpenSSH — only the first takes effect).
+	// SendEnv tells the client to read values from its own process
+	// environment — only key names appear in argv, not secret values.
 	if len(cc.Env) > 0 {
 		keys := make([]string, 0, len(cc.Env))
 		for k := range cc.Env {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-
-		var setenv strings.Builder
-		setenv.WriteString("SetEnv=")
-		for i, k := range keys {
-			if i > 0 {
-				setenv.WriteByte(' ')
-			}
-			fmt.Fprintf(&setenv, "%s=%s", k, cc.Env[k])
-		}
-		args = append(args, "-o", setenv.String())
+		args = append(args, "-o", "SendEnv="+strings.Join(keys, " "))
 	}
 
 	args = append(args, cc.User+"@"+cc.Host)
 	return args
+}
+
+// EnvWithOverrides returns a copy of base with entries from overrides
+// added or replaced. Used to inject env vars into the SSH process
+// environment so that SendEnv can forward them.
+func EnvWithOverrides(base []string, overrides map[string]string) []string {
+	env := make([]string, len(base))
+	copy(env, base)
+	for k, v := range overrides {
+		prefix := k + "="
+		found := false
+		for i, e := range env {
+			if strings.HasPrefix(e, prefix) {
+				env[i] = prefix + v
+				found = true
+				break
+			}
+		}
+		if !found {
+			env = append(env, prefix+v)
+		}
+	}
+	return env
 }
 
 // RemoveKnownHost removes all entries for the given host from the known_hosts

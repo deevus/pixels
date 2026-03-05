@@ -3,6 +3,7 @@ package truenas
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -34,6 +35,9 @@ func (t *TrueNAS) Run(ctx context.Context, name string, opts sandbox.ExecOpts) (
 		cmd.Stdin = opts.Stdin
 		cmd.Stdout = opts.Stdout
 		cmd.Stderr = opts.Stderr
+		if len(cc.Env) > 0 {
+			cmd.Env = ssh.EnvWithOverrides(os.Environ(), cc.Env)
+		}
 
 		if err := cmd.Run(); err != nil {
 			if exitErr, ok := err.(*exec.ExitError); ok {

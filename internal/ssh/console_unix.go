@@ -17,5 +17,9 @@ func Console(cc ConnConfig, remoteCmd string) error {
 		return fmt.Errorf("ssh binary not found: %w", err)
 	}
 	args := append([]string{"ssh"}, consoleArgs(cc, remoteCmd)...)
-	return syscall.Exec(sshBin, args, os.Environ())
+	environ := os.Environ()
+	if len(cc.Env) > 0 {
+		environ = EnvWithOverrides(environ, cc.Env)
+	}
+	return syscall.Exec(sshBin, args, environ)
 }

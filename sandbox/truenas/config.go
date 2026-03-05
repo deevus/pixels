@@ -36,8 +36,8 @@ type tnConfig struct {
 	allow     []string
 	dns       []string
 
-	env        map[string]string
-	envForward map[string]string
+	env            map[string]string
+	envForwardKeys []string
 }
 
 // parseCfg extracts a tnConfig from a flat key-value map.
@@ -142,6 +142,9 @@ func parseCfg(m map[string]string) (*tnConfig, error) {
 	}
 	if v := m["dns"]; v != "" {
 		c.dns = strings.Split(v, ",")
+	}
+	if v := m["env_forward_keys"]; v != "" {
+		c.envForwardKeys = strings.Split(v, ",")
 	}
 
 	// Validate required fields.

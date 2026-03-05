@@ -19,5 +19,8 @@ func Console(cc ConnConfig, remoteCmd string) error {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	if len(cc.Env) > 0 {
+		cmd.Env = EnvWithOverrides(os.Environ(), cc.Env)
+	}
 	return cmd.Run()
 }

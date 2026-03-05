@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -92,6 +93,14 @@ func sandboxConfig() map[string]string {
 	}
 	if len(cfg.Defaults.DNS) > 0 {
 		m["dns"] = strings.Join(cfg.Defaults.DNS, ",")
+	}
+	if len(cfg.EnvForward) > 0 {
+		keys := make([]string, 0, len(cfg.EnvForward))
+		for k := range cfg.EnvForward {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		m["env_forward_keys"] = strings.Join(keys, ",")
 	}
 
 	// Backend-specific keys.
