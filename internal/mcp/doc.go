@@ -14,7 +14,7 @@
 //
 //	INDEPENDENT PRIMITIVES (do not interact with the above):
 //
-//	  - BuildLock (file flock)  — only acquired inside Builder.doBuild;
+//	  - BuildLock (file flock)  — only acquired inside Builder.DoBuild;
 //	                               serialises CLI vs daemon builds of the same base.
 //	  - PIDFile                 — held for daemon lifetime.
 //
@@ -26,7 +26,7 @@
 //	    (does not inherit a held lock from the request goroutine), and re-checks
 //	    state at the top to handle the destroy-during-create race window.
 //	  - Builder.Build dedupes concurrent in-process callers via a buildState map;
-//	    cross-process serialization is via BuildLock (flock) inside doBuild.
-//	  - Builder.doBuild's lock is acquired INSIDE the singleflight-equivalent —
+//	    cross-process serialization is via BuildLock (flock) inside DoBuild.
+//	  - Builder.DoBuild's lock is acquired INSIDE the singleflight-equivalent —
 //	    so only one in-process goroutine ever holds the file lock at a time.
 package mcp

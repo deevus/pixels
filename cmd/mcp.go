@@ -118,28 +118,6 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		BuildLockDir:   buildLockDir,
 	}, cfg.MCP.EndpointPath)
 
-	// Wire SnapshotExists: check if the builder container exists and has the snapshot.
-	tools.SnapshotExists = func(ctx context.Context, baseName string) bool {
-		builderName := mcppkg.BuilderContainerName(baseName)
-		inst, err := sb.Get(ctx, builderName)
-		if err != nil {
-			return false
-		}
-		// Builder must be stopped — a running builder means it's being rebuilt.
-		_ = inst
-		snaps, err := sb.ListSnapshots(ctx, builderName)
-		if err != nil {
-			return false
-		}
-		snapName := mcppkg.SnapshotName(baseName)
-		for _, s := range snaps {
-			if s.Label == snapName {
-				return true
-			}
-		}
-		return false
-	}
-
 	reaper := &mcppkg.Reaper{
 		State:            state,
 		Backend:          sb,
@@ -176,6 +154,20 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
 	cancel()
+
+	// Wait up to 30s for in-flight provisioning goroutines to finish, so their
+	// final State writes (MarkRunning / MarkFailed / SetIP) make it to disk.
+	done := make(chan struct{})
+	go func() {
+		tools.WaitProvisioning()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		log.Warn("daemon shutdown: provisioning goroutines still in flight after 30s; final state may be incomplete")
+	}
+
 	_ = state.Save()
 	return nil
 }

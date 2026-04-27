@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -78,6 +79,12 @@ func (f *fakeSandbox) CreateSnapshot(ctx context.Context, n, l string) error {
 }
 func (f *fakeSandbox) ListSnapshots(ctx context.Context, n string) ([]sandbox.Snapshot, error) {
 	return nil, nil
+}
+func (f *fakeSandbox) SnapshotExists(ctx context.Context, instanceName, label string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.snapshots[label]
+	return ok, nil
 }
 func (f *fakeSandbox) DeleteSnapshot(ctx context.Context, n, l string) error    { return nil }
 func (f *fakeSandbox) RestoreSnapshot(ctx context.Context, n, l string) error   { return nil }
@@ -197,12 +204,6 @@ func TestListBasesReturnsConfiguredBases(t *testing.T) {
 	tt.Builder = &Builder{}
 	fb.snapshots["px-base-python"] = "ready" // python is built; node is not
 
-	// Override SnapshotExists to check the fake snapshot map.
-	tt.SnapshotExists = func(ctx context.Context, baseName string) bool {
-		_, ok := fb.snapshots[SnapshotName(baseName)]
-		return ok
-	}
-
 	out, err := tt.ListBases(context.Background(), EmptyIn{})
 	if err != nil {
 		t.Fatal(err)
@@ -281,10 +282,6 @@ func TestCreateSandboxWithBaseClonesFromSnapshot(t *testing.T) {
 
 	// Pretend the snapshot already exists for this test.
 	fb.snapshots[SnapshotName("python")] = "ready"
-	tt.SnapshotExists = func(ctx context.Context, baseName string) bool {
-		_, ok := fb.snapshots[SnapshotName(baseName)]
-		return ok
-	}
 
 	out, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{Base: "python"})
 	if err != nil {
@@ -556,5 +553,51 @@ func TestDeleteFileRemoves(t *testing.T) {
 	}
 	if _, ok := be.files["/x"]; ok {
 		t.Error("file should be deleted")
+	}
+}
+
+// TestCreateSandboxSkipsBuildWhenSnapshotExists verifies the wired-backend path:
+// when the backend reports a snapshot already exists, provisionFromBase must
+// clone directly without invoking Builder.Build. This exercises the production
+// wiring (Backend.SnapshotExists), not a function-field seam, so a regression
+// in that wiring is caught here.
+func TestCreateSandboxSkipsBuildWhenSnapshotExists(t *testing.T) {
+	tt, fb := newTestTools(t)
+	tt.Cfg = &config.Config{
+		MCP: config.MCP{
+			Bases: map[string]config.Base{
+				"python": {
+					ParentImage: "images:ubuntu/24.04",
+					SetupScript: writeTempScript(t, "#!/bin/bash\necho hi\n"),
+				},
+			},
+		},
+	}
+	tt.BuildLockDir = t.TempDir()
+	var buildCalls atomic.Int32
+	tt.Builder = &Builder{
+		DoBuild: func(ctx context.Context, name string) error {
+			buildCalls.Add(1)
+			return BuildBase(ctx, tt.Backend, tt.Cfg.MCP.Bases[name], name, io.Discard)
+		},
+	}
+
+	// Arrange: snapshot already exists in fake backend state.
+	fb.snapshots[SnapshotName("python")] = "ready"
+
+	out, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{Base: "python"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustEventually(t, func() bool {
+		got, _ := tt.State.Get(out.Name)
+		return got.Status == "running"
+	})
+	if got := buildCalls.Load(); got != 0 {
+		t.Errorf("Builder.Build should not have been called when snapshot exists; got %d calls", got)
+	}
+	if len(fb.cloned) != 1 || fb.cloned[0].source != BuilderContainerName("python") || fb.cloned[0].label != SnapshotName("python") {
+		t.Errorf("expected single CloneFrom of builder %s/%s; got %+v",
+			BuilderContainerName("python"), SnapshotName("python"), fb.cloned)
 	}
 }

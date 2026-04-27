@@ -30,9 +30,13 @@ type Tools struct {
 	Cfg            *config.Config
 	Builder         *Builder
 	BuildLockDir    string
-	SnapshotExists  SnapshotExistsFn // set by cmd/mcp.go; checks builder container exists + has snapshot
 	provisionWG     sync.WaitGroup // test affordance: tracks in-flight provisioning goroutines
 }
+
+// WaitProvisioning blocks until all in-flight provisioning goroutines complete.
+// Used by the daemon shutdown path so final State writes (MarkRunning /
+// MarkFailed / SetIP) make it to disk before the process exits.
+func (t *Tools) WaitProvisioning() { t.provisionWG.Wait() }
 
 func (t *Tools) log() *slog.Logger {
 	if t.Log == nil {
@@ -279,7 +283,13 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 
 	// Ensure the snapshot exists (build if not). This blocks for the duration
 	// of the build, which may be minutes — that's fine; we're in a goroutine.
-	exists := t.SnapshotExists != nil && t.SnapshotExists(ctx, in.Base)
+	builder := BuilderContainerName(in.Base)
+	snapLabel := SnapshotName(in.Base)
+	exists, err := t.Backend.SnapshotExists(ctx, builder, snapLabel)
+	if err != nil {
+		t.log().Warn("snapshot existence check failed; will rebuild", "base", in.Base, "err", err)
+		exists = false
+	}
 	if !exists {
 		if err := t.Builder.Build(ctx, in.Base); err != nil {
 			t.State.MarkFailed(name, fmt.Errorf("build base %s: %w", in.Base, err))
@@ -292,9 +302,7 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 		}
 	}
 
-	bld := BuilderContainerName(in.Base)
-	snap := SnapshotName(in.Base)
-	if err := t.Backend.CloneFrom(ctx, bld, snap, name); err != nil {
+	if err := t.Backend.CloneFrom(ctx, builder, snapLabel, name); err != nil {
 		t.State.MarkFailed(name, fmt.Errorf("clone: %w", err))
 		_ = t.persist()
 		return
@@ -316,11 +324,6 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 	}
 	t.log().Info("cloned from base", "name", name, "base", in.Base)
 }
-
-// SnapshotExistsFn checks whether a named base snapshot exists. The baseName
-// is the bare name from config (e.g. "python"), not the prefixed snapshot name.
-// Tests can override this to avoid needing a real backend.
-type SnapshotExistsFn func(ctx context.Context, baseName string) bool
 
 // BuilderContainerName returns the fixed container name that holds the
 // snapshot for the given base. This is the name of the stopped builder
@@ -431,7 +434,11 @@ func (t *Tools) ListBases(ctx context.Context, _ EmptyIn) (ListBasesOut, error) 
 		}
 
 		// Snapshot present or absent?
-		exists := t.SnapshotExists != nil && t.SnapshotExists(ctx, name)
+		exists, err := t.Backend.SnapshotExists(ctx, BuilderContainerName(name), SnapshotName(name))
+		if err != nil {
+			t.log().Warn("snapshot existence check failed", "base", name, "err", err)
+			exists = false
+		}
 		if exists {
 			view.Status = "ready"
 		} else {
