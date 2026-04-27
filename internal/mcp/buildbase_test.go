@@ -28,12 +28,16 @@ func TestBuildBaseSequenceOfBackendCalls(t *testing.T) {
 	}
 
 	if got := len(be.created); got != 1 {
-		t.Errorf("expected exactly one temp sandbox created, got %d", got)
+		t.Errorf("expected exactly one builder container created, got %d", got)
 	}
-	if be.snapshots["px-base-python"] != "ready" {
-		t.Errorf("expected snapshot px-base-python; got snapshots=%v", be.snapshots)
+	if be.snapshots[SnapshotName("python")] != "ready" {
+		t.Errorf("expected snapshot %s; got snapshots=%v", SnapshotName("python"), be.snapshots)
 	}
-	if got := len(be.deleted); got != 1 {
-		t.Errorf("expected temp deleted; got %v", be.deleted)
+	if got := len(be.stopped); got != 1 || be.stopped[0] != BuilderContainerName("python") {
+		t.Errorf("expected builder %s stopped; got stopped=%v", BuilderContainerName("python"), be.stopped)
+	}
+	// Should have best-effort deleted any existing builder at start.
+	if got := len(be.deleted); got != 1 || be.deleted[0] != BuilderContainerName("python") {
+		t.Errorf("expected builder %s deleted at start; got deleted=%v", BuilderContainerName("python"), be.deleted)
 	}
 }

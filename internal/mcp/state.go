@@ -1,5 +1,3 @@
-// Package mcp implements an MCP server that exposes pixels sandbox
-// lifecycle, exec, and file I/O as tools for AI agents.
 package mcp
 
 import (

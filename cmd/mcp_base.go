@@ -42,7 +42,8 @@ var mcpDeleteBaseCmd = &cobra.Command{
 
 var mcpListBasesCmd = &cobra.Command{
 	Use:   "list-bases",
-	Short: "List declared base pixels and their status",
+	Short: "List declared base pixels from config",
+	Long:  "List base pixels declared in config. Use the MCP tool list_bases to see status (ready/missing/building/failed).",
 	RunE:  runListBases,
 }
 
@@ -87,10 +88,8 @@ func runRebuildBase(cmd *cobra.Command, args []string) error {
 	}
 	defer bl.Release()
 
-	// Best-effort: delete existing snapshot if present.
-	// For v1, backends don't have a standalone-snapshot-delete API that works
-	// across containers. Document the limitation.
-	fmt.Fprintf(os.Stderr, "WARN: existing snapshot not auto-deleted; run `pixels mcp delete-base %s` first if it exists\n", name)
+	// BuildBase already handles rebuilds: it best-effort deletes the existing
+	// builder container at the start, then creates a fresh one.
 	return mcppkg.BuildBase(context.Background(), sb, baseCfg, name, os.Stderr)
 }
 
@@ -102,10 +101,7 @@ func runDeleteBase(cmd *cobra.Command, args []string) error {
 	}
 	defer sb.Close()
 
-	// Base snapshots live on the build temp containers; there's no standalone
-	// API to delete them without knowing which container owns them.
-	fmt.Fprintf(os.Stderr, "delete-base for %s: not implemented in v1; manually use `incus delete <snapshot>` or delete the px-build-* container\n", name)
-	return nil
+	return fmt.Errorf("delete-base for %s: not implemented in v1; manually use `incus delete <snapshot>` or `pixels mcp build-base` to rebuild", name)
 }
 
 func runListBases(cmd *cobra.Command, args []string) error {

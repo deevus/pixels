@@ -104,7 +104,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		return mcppkg.BuildBase(buildCtx, sb, baseCfg, name, os.Stderr)
 	}
 
-	mux, _ := mcppkg.NewServer(mcppkg.ServerOpts{
+	mux, tools := mcppkg.NewServer(mcppkg.ServerOpts{
 		State:          state,
 		Backend:        sb,
 		Prefix:         cfg.MCP.Prefix,
@@ -117,6 +117,28 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		Builder:        builder,
 		BuildLockDir:   buildLockDir,
 	}, cfg.MCP.EndpointPath)
+
+	// Wire SnapshotExists: check if the builder container exists and has the snapshot.
+	tools.SnapshotExists = func(ctx context.Context, baseName string) bool {
+		builderName := mcppkg.BuilderContainerName(baseName)
+		inst, err := sb.Get(ctx, builderName)
+		if err != nil {
+			return false
+		}
+		// Builder must be stopped — a running builder means it's being rebuilt.
+		_ = inst
+		snaps, err := sb.ListSnapshots(ctx, builderName)
+		if err != nil {
+			return false
+		}
+		snapName := mcppkg.SnapshotName(baseName)
+		for _, s := range snaps {
+			if s.Label == snapName {
+				return true
+			}
+		}
+		return false
+	}
 
 	reaper := &mcppkg.Reaper{
 		State:            state,

@@ -198,8 +198,8 @@ func TestListBasesReturnsConfiguredBases(t *testing.T) {
 	fb.snapshots["px-base-python"] = "ready" // python is built; node is not
 
 	// Override SnapshotExists to check the fake snapshot map.
-	tt.SnapshotExists = func(ctx context.Context, sandboxName, snapName string) bool {
-		_, ok := fb.snapshots[snapName]
+	tt.SnapshotExists = func(ctx context.Context, baseName string) bool {
+		_, ok := fb.snapshots[SnapshotName(baseName)]
 		return ok
 	}
 
@@ -280,7 +280,11 @@ func TestCreateSandboxWithBaseClonesFromSnapshot(t *testing.T) {
 	}
 
 	// Pretend the snapshot already exists for this test.
-	fb.snapshots["px-base-python"] = "ready"
+	fb.snapshots[SnapshotName("python")] = "ready"
+	tt.SnapshotExists = func(ctx context.Context, baseName string) bool {
+		_, ok := fb.snapshots[SnapshotName(baseName)]
+		return ok
+	}
 
 	out, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{Base: "python"})
 	if err != nil {
@@ -291,9 +295,9 @@ func TestCreateSandboxWithBaseClonesFromSnapshot(t *testing.T) {
 		got, _ := tt.State.Get(out.Name)
 		return got.Status == "running"
 	})
-	// Verify CloneFrom was used, not Create.
-	if len(fb.cloned) != 1 || fb.cloned[0].source != "px-base-python" {
-		t.Errorf("expected CloneFrom px-base-python; got %+v", fb.cloned)
+	// Verify CloneFrom was used with the builder container, not Create.
+	if len(fb.cloned) != 1 || fb.cloned[0].source != BuilderContainerName("python") || fb.cloned[0].label != SnapshotName("python") {
+		t.Errorf("expected CloneFrom builder %s snap %s; got %+v", BuilderContainerName("python"), SnapshotName("python"), fb.cloned)
 	}
 }
 
