@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -56,6 +57,61 @@ func TestStateRemove(t *testing.T) {
 	}
 	if _, ok := s.Get("b"); !ok {
 		t.Error("b should remain")
+	}
+}
+
+func TestStateSaveAndReload(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	s, _ := LoadState(path)
+	s.Add(Sandbox{
+		Name:      "px-mcp-1",
+		Image:     "ubuntu/24.04",
+		Status:    "running",
+		CreatedAt: time.Date(2026, 4, 27, 10, 0, 0, 0, time.UTC),
+	})
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	s2, err := LoadState(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	got, ok := s2.Get("px-mcp-1")
+	if !ok || got.Image != "ubuntu/24.04" {
+		t.Fatalf("reloaded sandbox = %+v, ok=%v", got, ok)
+	}
+}
+
+func TestStateSaveAtomicNoTmpLeft(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+
+	s, _ := LoadState(path)
+	s.Add(Sandbox{Name: "a"})
+	if err := s.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("tmp file should not exist after successful save")
+	}
+}
+
+func TestStateLoadCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "state.json")
+	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := LoadState(path)
+	if err != nil {
+		t.Fatalf("expected silent recovery, got error: %v", err)
+	}
+	if got := len(s.Sandboxes()); got != 0 {
+		t.Errorf("Sandboxes = %d, want 0 after corrupt load", got)
 	}
 }
 
