@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -28,7 +29,18 @@ type State struct {
 	path string
 	mu   sync.RWMutex
 	data stateData
+	log  *slog.Logger // optional; nil-safe via stateLog()
 }
+
+func (s *State) stateLog() *slog.Logger {
+	if s.log == nil {
+		return NopLogger()
+	}
+	return s.log
+}
+
+// SetLogger assigns the logger after construction. Call once at startup.
+func (s *State) SetLogger(l *slog.Logger) { s.log = l }
 
 type stateData struct {
 	Sandboxes []Sandbox `json:"sandboxes"`

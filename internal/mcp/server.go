@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -16,16 +17,22 @@ type ServerOpts struct {
 	Prefix         string
 	DefaultImage   string
 	ExecTimeoutMax time.Duration
+	Log            *slog.Logger
 }
 
 // NewServer wires the MCP tool surface and returns an HTTP handler ready to mount.
 func NewServer(opts ServerOpts, endpointPath string) (http.Handler, *Tools) {
+	log := opts.Log
+	if log == nil {
+		log = NopLogger()
+	}
 	tools := &Tools{
 		State:          opts.State,
 		Backend:        opts.Backend,
 		Prefix:         opts.Prefix,
 		DefaultImage:   opts.DefaultImage,
 		ExecTimeoutMax: opts.ExecTimeoutMax,
+		Log:            log,
 	}
 
 	srv := sdk.NewServer(&sdk.Implementation{Name: "pixels-mcp", Version: "0.1.0"}, nil)

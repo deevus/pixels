@@ -18,6 +18,7 @@ var (
 	mcpListenAddr string
 	mcpStateFile  string
 	mcpPIDFile    string
+	mcpVerbose    bool
 )
 
 var mcpCmd = &cobra.Command{
@@ -30,6 +31,7 @@ func init() {
 	mcpCmd.Flags().StringVar(&mcpListenAddr, "listen-addr", "", "override [mcp].listen_addr")
 	mcpCmd.Flags().StringVar(&mcpStateFile, "state-file", "", "override [mcp].state_file")
 	mcpCmd.Flags().StringVar(&mcpPIDFile, "pid-file", "", "override [mcp].pid_file")
+	mcpCmd.Flags().BoolVarP(&mcpVerbose, "verbose", "v", false, "log at debug level (tool entry/exit, backend calls)")
 	rootCmd.AddCommand(mcpCmd)
 }
 
@@ -77,6 +79,9 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		defaultImg = cfg.Defaults.Image
 	}
 
+	log := mcppkg.NewLogger(os.Stderr, mcpVerbose)
+	state.SetLogger(log)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -86,6 +91,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		Prefix:         cfg.MCP.Prefix,
 		DefaultImage:   defaultImg,
 		ExecTimeoutMax: execMax,
+		Log:            log,
 	}, cfg.MCP.EndpointPath)
 
 	reaper := &mcppkg.Reaper{
@@ -93,6 +99,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		Backend:          sb,
 		IdleStopAfter:    idle,
 		HardDestroyAfter: hard,
+		Log:              log,
 	}
 	reaper.Tick(ctx) // immediate startup pass
 	go reaper.Run(ctx, reapInterval)

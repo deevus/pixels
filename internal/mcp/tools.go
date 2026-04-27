@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -21,12 +22,20 @@ type Tools struct {
 	Prefix         string
 	DefaultImage   string
 	ExecTimeoutMax time.Duration
+	Log            *slog.Logger // not nil; defaults to NopLogger if not set
 
 	// Per-sandbox mutex map. Tool handlers acquire the lock for the duration
 	// of any call that touches the container, so concurrent ops on the same
 	// sandbox don't race.
 	mu      sync.Mutex
 	sbLocks map[string]*sync.Mutex
+}
+
+func (t *Tools) log() *slog.Logger {
+	if t.Log == nil {
+		return NopLogger()
+	}
+	return t.Log
 }
 
 func (t *Tools) sbMutex(name string) *sync.Mutex {

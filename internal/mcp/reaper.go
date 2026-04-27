@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 )
@@ -19,7 +20,15 @@ type Reaper struct {
 	Backend          LifecycleBackend
 	IdleStopAfter    time.Duration
 	HardDestroyAfter time.Duration
+	Log              *slog.Logger
 	Now              func() time.Time // injectable clock for tests
+}
+
+func (r *Reaper) log() *slog.Logger {
+	if r.Log == nil {
+		return NopLogger()
+	}
+	return r.Log
 }
 
 // Tick performs one reaper pass. Safe to call repeatedly.
