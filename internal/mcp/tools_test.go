@@ -118,7 +118,7 @@ func newTestTools(t *testing.T) (*Tools, *fakeSandbox) {
 }
 
 func TestCreateSandboxPropagatesSaveError(t *testing.T) {
-	tt, _ := newTestTools(t)
+	tt, be := newTestTools(t)
 	// Force Save() to fail by using an unwritable path.
 	tt.State.SetPathForTest("/nonexistent/dir/state.json")
 
@@ -128,6 +128,11 @@ func TestCreateSandboxPropagatesSaveError(t *testing.T) {
 	}
 	if got := len(tt.State.Sandboxes()); got != 0 {
 		t.Errorf("state should be empty after save failure; got %d", got)
+	}
+	// Rollback semantics: backend container was created but in-memory state
+	// was rolled back so a retry won't see a phantom.
+	if len(be.created) != 1 {
+		t.Errorf("backend.Create should have been called exactly once; got %d", len(be.created))
 	}
 }
 

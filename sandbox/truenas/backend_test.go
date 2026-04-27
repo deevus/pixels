@@ -30,6 +30,15 @@ func newTestBackend(t *testing.T, client *Client) *TrueNAS {
 	return tn
 }
 
+func TestNewForTestWiresFilesViaExec(t *testing.T) {
+	tn := newTestBackend(t, &Client{
+		Virt: &tnapi.MockVirtService{},
+	})
+	if tn.FilesViaExec.Exec == nil {
+		t.Fatal("NewForTest: FilesViaExec.Exec is nil; should be the TrueNAS instance itself")
+	}
+}
+
 func TestGet(t *testing.T) {
 	tests := []struct {
 		name     string

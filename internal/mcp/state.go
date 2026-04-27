@@ -29,14 +29,7 @@ type State struct {
 	path string
 	mu   sync.RWMutex
 	data stateData
-	log  *slog.Logger // optional; nil-safe via stateLog()
-}
-
-func (s *State) stateLog() *slog.Logger {
-	if s.log == nil {
-		return NopLogger()
-	}
-	return s.log
+	log  *slog.Logger
 }
 
 // SetLogger assigns the logger after construction. Call once at startup.
