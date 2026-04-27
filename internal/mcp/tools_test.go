@@ -245,9 +245,10 @@ func TestListBasesReturnsConfiguredBases(t *testing.T) {
 		},
 	}
 	tt.Builder = &Builder{}
-	// python base container exists with snapshot; node does not
-	fb.created = append(fb.created, sandbox.CreateOpts{Name: "px-base-python"})
-	fb.snapshots["px-base-python:"+InitialCheckpointLabel] = time.Now()
+	// python base container exists with snapshot; node does not.
+	// Prefix is empty in this Cfg → BaseName falls back to DefaultBasePrefix ("base-").
+	fb.created = append(fb.created, sandbox.CreateOpts{Name: "base-python"})
+	fb.snapshots["base-python:"+InitialCheckpointLabel] = time.Now()
 
 	out, err := tt.ListBases(context.Background(), EmptyIn{})
 	if err != nil {

@@ -144,8 +144,11 @@ func Load() (*Config, error) {
 			Egress: "unrestricted",
 		},
 		MCP: MCP{
-			Prefix:           "px-mcp-",
-			BasePrefix:       "px-base-",
+			// Prefix and BasePrefix sit *inside* the backend's "px-" namespace.
+			// Final on-disk names are "px-<Prefix><name>" / "px-<BasePrefix><name>"
+			// because both backends unconditionally prepend "px-" via prefixed().
+			Prefix:           "mcp-",
+			BasePrefix:       "base-",
 			IdleStopAfter:    "1h",
 			HardDestroyAfter: "24h",
 			ReapInterval:     "1m",

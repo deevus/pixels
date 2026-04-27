@@ -85,6 +85,14 @@ func (t *TrueNAS) Capabilities() sandbox.Capabilities {
 	}
 }
 
+// WriteFile writes content to a file inside the container via the TrueNAS
+// filesystem API (no SSH required). Overrides the embedded FilesViaExec.WriteFile
+// so file uploads work even before SSH provisioning has set up authorized_keys
+// (e.g. during BuildBase).
+func (t *TrueNAS) WriteFile(ctx context.Context, name, path string, content []byte, mode os.FileMode) error {
+	return t.client.WriteContainerFile(ctx, prefixed(name), path, content, mode)
+}
+
 // Close closes the underlying TrueNAS WebSocket connection.
 func (t *TrueNAS) Close() error {
 	return t.client.Close()

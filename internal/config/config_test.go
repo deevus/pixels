@@ -588,7 +588,7 @@ func TestMCPDefaults(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	if got, want := cfg.MCP.Prefix, "px-mcp-"; got != want {
+	if got, want := cfg.MCP.Prefix, "mcp-"; got != want {
 		t.Errorf("Prefix = %q, want %q", got, want)
 	}
 	if got, want := cfg.MCP.IdleStopAfter, "1h"; got != want {
@@ -739,7 +739,7 @@ func TestMCPBasePrefixDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got, want := cfg.MCP.BasePrefix, "px-base-"; got != want {
+	if got, want := cfg.MCP.BasePrefix, "base-"; got != want {
 		t.Errorf("BasePrefix = %q, want %q", got, want)
 	}
 }

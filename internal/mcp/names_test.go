@@ -20,9 +20,9 @@ func TestBaseNameRespectsCustomPrefix(t *testing.T) {
 	}
 }
 
-func TestBaseNameDefaultsToPxBaseWhenEmpty(t *testing.T) {
+func TestBaseNameDefaultsToBaseWhenEmpty(t *testing.T) {
 	cfg := &config.Config{MCP: config.MCP{}}
-	if got, want := BaseName(cfg, "python"), "px-base-python"; got != want {
-		t.Errorf("BaseName = %q, want %q (empty prefix should fall back to px-base-)", got, want)
+	if got, want := BaseName(cfg, "python"), "base-python"; got != want {
+		t.Errorf("BaseName = %q, want %q (empty prefix should fall back to base-)", got, want)
 	}
 }
