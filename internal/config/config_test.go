@@ -643,6 +643,37 @@ idle_stop_after = "30m"
 	}
 }
 
+func TestMCPStateFilePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	cfg := &Config{}
+	got := cfg.MCPStateFile()
+	want := filepath.Join(tmpDir, "pixels", "mcp-state.json")
+	if got != want {
+		t.Errorf("MCPStateFile = %q, want %q", got, want)
+	}
+}
+
+func TestMCPStateFilePathOverride(t *testing.T) {
+	cfg := &Config{MCP: MCP{StateFile: "/custom/state.json"}}
+	if got, want := cfg.MCPStateFile(), "/custom/state.json"; got != want {
+		t.Errorf("MCPStateFile = %q, want %q", got, want)
+	}
+}
+
+func TestMCPPIDFilePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	cfg := &Config{}
+	got := cfg.MCPPIDFile()
+	want := filepath.Join(tmpDir, "pixels", "mcp.pid")
+	if got != want {
+		t.Errorf("MCPPIDFile = %q, want %q", got, want)
+	}
+}
+
 func TestExpandHome(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {

@@ -236,6 +236,30 @@ func (t *TrueNAS) InsecureSkipVerifyValue() bool {
 	return *t.InsecureSkipVerify
 }
 
+// MCPStateFile returns the resolved path to the MCP state file.
+func (c *Config) MCPStateFile() string {
+	if c.MCP.StateFile != "" {
+		return expandHome(c.MCP.StateFile)
+	}
+	return filepath.Join(mcpCacheDir(), "mcp-state.json")
+}
+
+// MCPPIDFile returns the resolved path to the MCP pidfile.
+func (c *Config) MCPPIDFile() string {
+	if c.MCP.PIDFile != "" {
+		return expandHome(c.MCP.PIDFile)
+	}
+	return filepath.Join(mcpCacheDir(), "mcp.pid")
+}
+
+func mcpCacheDir() string {
+	if dir := os.Getenv("XDG_CACHE_HOME"); dir != "" {
+		return filepath.Join(dir, "pixels")
+	}
+	dir, _ := os.UserCacheDir()
+	return filepath.Join(dir, "pixels")
+}
+
 // KnownHostsPath returns the path to the pixels-managed SSH known_hosts file.
 func KnownHostsPath() string {
 	dir := filepath.Dir(configPath())
