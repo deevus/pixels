@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -262,10 +263,15 @@ func (t *TrueNAS) ListSnapshots(ctx context.Context, name string) ([]sandbox.Sna
 	}
 	result := make([]sandbox.Snapshot, len(snaps))
 	for i, s := range snaps {
+		// TrueNAS doesn't expose ZFS creation time via truenas-go; synthesize from CreateTXG for monotonic ordering. Not real wall-clock time.
+		var createdAt time.Time
+		if txg, err := strconv.ParseInt(s.CreateTXG, 10, 64); err == nil {
+			createdAt = time.Unix(txg, 0).UTC()
+		}
 		result[i] = sandbox.Snapshot{
 			Label:     s.SnapshotName,
 			Size:      s.Referenced,
-			CreatedAt: time.Time{}, // truenas-go API doesn't expose ZFS creation timestamp
+			CreatedAt: createdAt,
 		}
 	}
 	return result, nil
