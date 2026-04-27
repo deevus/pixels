@@ -66,7 +66,7 @@ func runBuildBase(cmd *cobra.Command, args []string) error {
 	}
 	defer bl.Release()
 
-	return mcppkg.BuildBase(context.Background(), sb, cfg, baseCfg, name, os.Stderr)
+	return mcppkg.BuildBase(context.Background(), sb, cfg, name, baseCfg, os.Stderr)
 }
 
 func runRebuildBase(cmd *cobra.Command, args []string) error {
@@ -90,7 +90,7 @@ func runRebuildBase(cmd *cobra.Command, args []string) error {
 
 	// BuildBase already handles rebuilds: it best-effort deletes the existing
 	// builder container at the start, then creates a fresh one.
-	return mcppkg.BuildBase(context.Background(), sb, cfg, baseCfg, name, os.Stderr)
+	return mcppkg.BuildBase(context.Background(), sb, cfg, name, baseCfg, os.Stderr)
 }
 
 func runDeleteBase(cmd *cobra.Command, args []string) error {

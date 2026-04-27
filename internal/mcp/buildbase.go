@@ -5,68 +5,74 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/deevus/pixels/internal/config"
 	"github.com/deevus/pixels/sandbox"
 )
 
-// BuildBase executes one full base-pixel build:
-//  1. Delete any existing builder container for this base (clean slate)
-//  2. Create new builder container from parent_image
-//  3. Wait Ready
-//  4. Upload setup_script via Backend.WriteFile
-//  5. Run `bash /tmp/pixels-setup.sh` via Backend.Run
-//  6. CreateSnapshot
-//  7. Stop the builder container (keeps snapshot alive for CloneFrom)
+// InitialCheckpointLabel is the label of the checkpoint created by BuildBase
+// after the setup script runs. Sandboxes spawned right after build clone
+// from this. Subsequent user `pixels checkpoint create` calls produce
+// timestamped labels; the daemon picks by CreatedAt, not label.
+const InitialCheckpointLabel = "initial"
+
+// BuildBase materialises a base container.
 //
-// On any failure it cleans up and returns the error.
-// out receives setup-script stdout/stderr for streaming to the user.
-func BuildBase(ctx context.Context, be sandbox.Sandbox, cfg *config.Config, baseCfg config.Base, name string, out io.Writer) error {
-	if baseCfg.ParentImage == "" {
-		return fmt.Errorf("base %q: parent_image not set", name)
-	}
-	if baseCfg.SetupScript == "" {
-		return fmt.Errorf("base %q: setup_script not set", name)
-	}
-
-	scriptBytes, err := os.ReadFile(baseCfg.SetupScript)
+// If baseCfg.From is set: clone from the parent base's latest checkpoint into
+// <BaseName(cfg, name)>. Otherwise create from baseCfg.ParentImage. Run the
+// setup script in the new container, stop it, then create the initial
+// checkpoint labelled InitialCheckpointLabel.
+//
+// out receives setup-script stdout/stderr for streaming to the user (when
+// invoked from the CLI) or the daemon log (when invoked via cascade build).
+func BuildBase(ctx context.Context, be sandbox.Sandbox, cfg *config.Config, name string, baseCfg config.Base, out io.Writer) error {
+	scriptBytes, err := loadSetupScript(baseCfg.SetupScript)
 	if err != nil {
-		return fmt.Errorf("read setup_script %s: %w", baseCfg.SetupScript, err)
+		return fmt.Errorf("base %s: load setup script: %w", name, err)
 	}
 
-	builderName := BuilderContainerName(name)
-	snapName := BaseName(cfg, name)
+	target := BaseName(cfg, name)
+
+	// Build the container — either fresh from image or cloned from parent base.
+	if baseCfg.From != "" {
+		parentName := BaseName(cfg, baseCfg.From)
+		latest, ok, err := LatestCheckpointFor(ctx, be, parentName)
+		if err != nil {
+			return fmt.Errorf("base %s: lookup parent checkpoint on %s: %w", name, parentName, err)
+		}
+		if !ok {
+			return fmt.Errorf("base %s: parent %s has no checkpoints; build the parent first", name, parentName)
+		}
+		if err := be.CloneFrom(ctx, parentName, latest.Label, target); err != nil {
+			return fmt.Errorf("base %s: clone from %s: %w", name, parentName, err)
+		}
+	} else if baseCfg.ParentImage != "" {
+		if _, err := be.Create(ctx, sandbox.CreateOpts{Name: target, Image: baseCfg.ParentImage}); err != nil {
+			return fmt.Errorf("base %s: create from image %s: %w", name, baseCfg.ParentImage, err)
+		}
+	} else {
+		return fmt.Errorf("base %s: neither parent_image nor from set", name)
+	}
+
 	cleanup := func() {
-		fmt.Fprintf(out, "==> Cleaning up builder %s\n", builderName)
-		if err := be.Delete(context.Background(), builderName); err != nil {
-			fmt.Fprintf(out, "WARN: cleanup failed: %v\n", err)
+		if err := be.Delete(context.Background(), target); err != nil {
+			fmt.Fprintf(out, "WARN: cleanup of %s after failure: %v\n", target, err)
 		}
 	}
 
-	// Delete any existing builder container for a clean build.
-	fmt.Fprintf(out, "==> Removing existing builder (if any)\n")
-	_ = be.Delete(ctx, builderName) // best-effort; may not exist
-
-	fmt.Fprintf(out, "==> Creating builder %s from %s\n", builderName, baseCfg.ParentImage)
-	if _, err := be.Create(ctx, sandbox.CreateOpts{Name: builderName, Image: baseCfg.ParentImage}); err != nil {
-		return fmt.Errorf("create builder: %w", err)
-	}
-
-	fmt.Fprintf(out, "==> Waiting for sandbox to be ready\n")
-	if err := be.Ready(ctx, builderName, 5*time.Minute); err != nil {
+	if err := be.Ready(ctx, target, 5*time.Minute); err != nil {
 		cleanup()
-		return fmt.Errorf("ready: %w", err)
+		return fmt.Errorf("base %s: ready: %w", name, err)
 	}
 
-	fmt.Fprintf(out, "==> Uploading setup script (%d bytes)\n", len(scriptBytes))
-	if err := be.WriteFile(ctx, builderName, "/tmp/pixels-setup.sh", scriptBytes, 0o755); err != nil {
+	// Upload + run setup script.
+	if err := be.WriteFile(ctx, target, "/tmp/pixels-setup.sh", scriptBytes, 0o755); err != nil {
 		cleanup()
-		return fmt.Errorf("upload script: %w", err)
+		return fmt.Errorf("base %s: upload script: %w", name, err)
 	}
-
-	fmt.Fprintf(out, "==> Running setup script\n")
-	exit, err := be.Run(ctx, builderName, sandbox.ExecOpts{
+	exit, err := be.Run(ctx, target, sandbox.ExecOpts{
 		Cmd:    []string{"bash", "/tmp/pixels-setup.sh"},
 		Stdout: out,
 		Stderr: out,
@@ -74,24 +80,50 @@ func BuildBase(ctx context.Context, be sandbox.Sandbox, cfg *config.Config, base
 	})
 	if err != nil {
 		cleanup()
-		return fmt.Errorf("setup script: %w", err)
+		return fmt.Errorf("base %s: setup script: %w", name, err)
 	}
 	if exit != 0 {
 		cleanup()
-		return fmt.Errorf("setup script exited %d", exit)
+		return fmt.Errorf("base %s: setup script exited %d", name, exit)
 	}
 
-	fmt.Fprintf(out, "==> Snapshotting as %s\n", snapName)
-	if err := be.CreateSnapshot(ctx, builderName, snapName); err != nil {
+	// Stop and snapshot.
+	if err := be.Stop(ctx, target); err != nil {
 		cleanup()
-		return fmt.Errorf("snapshot: %w", err)
+		return fmt.Errorf("base %s: stop: %w", name, err)
 	}
-
-	// Stop (don't delete) — the snapshot lives on this container.
-	if err := be.Stop(ctx, builderName); err != nil {
+	if err := be.CreateSnapshot(ctx, target, InitialCheckpointLabel); err != nil {
 		cleanup()
-		return fmt.Errorf("stop builder: %w", err)
+		return fmt.Errorf("base %s: snapshot: %w", name, err)
 	}
-	fmt.Fprintf(out, "==> Done (builder %s stopped, snapshot %s ready)\n", builderName, snapName)
+	fmt.Fprintf(out, "==> Base %s ready (initial checkpoint created).\n", name)
 	return nil
+}
+
+// loadSetupScript reads the setup script from disk or the embedded FS based
+// on the path's `mcp:` prefix. Centralised so callers don't open-code.
+func loadSetupScript(path string) ([]byte, error) {
+	if strings.HasPrefix(path, "mcp:") {
+		return DefaultsFS.ReadFile(strings.TrimPrefix(path, "mcp:"))
+	}
+	return os.ReadFile(path)
+}
+
+// LatestCheckpointFor returns the most-recent (by CreatedAt) checkpoint on
+// the named container, or ok=false if none exist.
+func LatestCheckpointFor(ctx context.Context, be sandbox.Sandbox, container string) (sandbox.Snapshot, bool, error) {
+	snaps, err := be.ListSnapshots(ctx, container)
+	if err != nil {
+		return sandbox.Snapshot{}, false, err
+	}
+	if len(snaps) == 0 {
+		return sandbox.Snapshot{}, false, nil
+	}
+	latest := snaps[0]
+	for _, s := range snaps[1:] {
+		if s.CreatedAt.After(latest.CreatedAt) {
+			latest = s
+		}
+	}
+	return latest, true, nil
 }

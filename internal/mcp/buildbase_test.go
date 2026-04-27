@@ -5,12 +5,15 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/deevus/pixels/internal/config"
+	"github.com/deevus/pixels/sandbox"
 )
 
-func TestBuildBaseSequenceOfBackendCalls(t *testing.T) {
+func TestBuildBaseFromParentImage(t *testing.T) {
 	dir := t.TempDir()
 	scriptPath := filepath.Join(dir, "setup.sh")
 	if err := os.WriteFile(scriptPath, []byte("#!/bin/bash\necho hi\n"), 0o755); err != nil {
@@ -18,27 +21,78 @@ func TestBuildBaseSequenceOfBackendCalls(t *testing.T) {
 	}
 
 	be := newFakeSandbox()
+	cfg := &config.Config{MCP: config.MCP{BasePrefix: "px-base-"}}
 	var buf bytes.Buffer
-	cfg := &config.Config{MCP: config.MCP{BasePrefix: DefaultBasePrefix}}
-	err := BuildBase(context.Background(), be, cfg, config.Base{
+	err := BuildBase(context.Background(), be, cfg, "python", config.Base{
 		ParentImage: "images:ubuntu/24.04",
 		SetupScript: scriptPath,
-	}, "python", &buf)
+	}, &buf)
 	if err != nil {
 		t.Fatalf("BuildBase: %v", err)
 	}
 
-	if got := len(be.created); got != 1 {
-		t.Errorf("expected exactly one builder container created, got %d", got)
+	if len(be.created) != 1 || be.created[0].Image != "images:ubuntu/24.04" {
+		t.Errorf("expected one container created from parent_image; got %v", be.created)
 	}
-	if be.snapshots[BaseName(cfg, "python")] != "ready" {
-		t.Errorf("expected snapshot %s; got snapshots=%v", BaseName(cfg, "python"), be.snapshots)
+	if be.created[0].Name != "px-base-python" {
+		t.Errorf("container name = %q, want px-base-python", be.created[0].Name)
 	}
-	if got := len(be.stopped); got != 1 || be.stopped[0] != BuilderContainerName("python") {
-		t.Errorf("expected builder %s stopped; got stopped=%v", BuilderContainerName("python"), be.stopped)
+	if got := be.snapshots["px-base-python:initial"]; got == (time.Time{}) {
+		t.Errorf("expected initial checkpoint on px-base-python; got snapshots=%v", be.snapshots)
 	}
-	// Should have best-effort deleted any existing builder at start.
-	if got := len(be.deleted); got != 1 || be.deleted[0] != BuilderContainerName("python") {
-		t.Errorf("expected builder %s deleted at start; got deleted=%v", BuilderContainerName("python"), be.deleted)
+}
+
+func TestBuildBaseFromParentBase(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "setup.sh")
+	_ = os.WriteFile(scriptPath, []byte("#!/bin/bash\necho hi\n"), 0o755)
+
+	be := newFakeSandbox()
+	cfg := &config.Config{MCP: config.MCP{BasePrefix: "px-base-"}}
+
+	// Pretend the parent base "dev" already exists with one checkpoint.
+	be.containers["px-base-dev"] = sandbox.Instance{Name: "px-base-dev", Status: sandbox.StatusStopped}
+	be.snapshots["px-base-dev:initial"] = time.Now()
+
+	var buf bytes.Buffer
+	err := BuildBase(context.Background(), be, cfg, "python", config.Base{
+		From:        "dev",
+		SetupScript: scriptPath,
+	}, &buf)
+	if err != nil {
+		t.Fatalf("BuildBase: %v", err)
+	}
+
+	if len(be.clonedNew) != 1 {
+		t.Fatalf("expected one clone-from operation; got %v", be.clonedNew)
+	}
+	if be.clonedNew[0].source != "px-base-dev" {
+		t.Errorf("clone source = %q, want px-base-dev", be.clonedNew[0].source)
+	}
+	if be.clonedNew[0].dest != "px-base-python" {
+		t.Errorf("clone dest = %q, want px-base-python", be.clonedNew[0].dest)
+	}
+}
+
+func TestBuildBaseEmbeddedSetupScript(t *testing.T) {
+	be := newFakeSandbox()
+	cfg := &config.Config{MCP: config.MCP{BasePrefix: "px-base-"}}
+	var buf bytes.Buffer
+	err := BuildBase(context.Background(), be, cfg, "dev", config.Base{
+		ParentImage: "images:ubuntu/24.04",
+		SetupScript: "mcp:bases/dev.sh",
+	}, &buf)
+	if err != nil {
+		t.Fatalf("BuildBase with embedded script: %v", err)
+	}
+	// Confirm the embedded script ran (fakeSandbox.Run records the cmd)
+	var sawSetup bool
+	for _, c := range be.runs {
+		if strings.Contains(strings.Join(c, " "), "bash") {
+			sawSetup = true
+		}
+	}
+	if !sawSetup {
+		t.Error("expected a bash setup-script run on the new base")
 	}
 }

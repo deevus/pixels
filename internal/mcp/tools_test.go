@@ -22,6 +22,10 @@ type cloneRecord struct {
 	newName string
 }
 
+type cloneCall struct {
+	source, dest string
+}
+
 type fakeSandbox struct {
 	mu         sync.Mutex
 	created    []sandbox.CreateOpts
@@ -31,14 +35,18 @@ type fakeSandbox struct {
 	files      map[string][]byte
 	runHook    func(name string, opts sandbox.ExecOpts) (int, error)
 	createHook func(o sandbox.CreateOpts) (*sandbox.Instance, error)
-	snapshots  map[string]string // snapName → ready
+	snapshots  map[string]interface{} // key "<container>:<label>" -> created at (time.Time) OR old format "snapName" -> "ready"
 	cloned     []cloneRecord
+	containers map[string]sandbox.Instance
+	clonedNew  []cloneCall
+	runs       [][]string
 }
 
 func newFakeSandbox() *fakeSandbox {
 	return &fakeSandbox{
-		files:     make(map[string][]byte),
-		snapshots: make(map[string]string),
+		files:      make(map[string][]byte),
+		snapshots:  make(map[string]interface{}),
+		containers: make(map[string]sandbox.Instance),
 	}
 }
 
@@ -90,21 +98,40 @@ func (f *fakeSandbox) Stop(ctx context.Context, n string) error             { f.
 func (f *fakeSandbox) Delete(ctx context.Context, n string) error           { f.deleted = append(f.deleted, n); return nil }
 func (f *fakeSandbox) CreateSnapshot(ctx context.Context, n, l string) error {
 	if f.snapshots == nil {
-		f.snapshots = make(map[string]string)
+		f.snapshots = make(map[string]interface{})
 	}
-	f.snapshots[l] = "ready"
+	// Store in new format: "<container>:<label>" -> time.Time
+	f.snapshots[n+":"+l] = time.Now()
 	return nil
 }
 func (f *fakeSandbox) ListSnapshots(ctx context.Context, n string) ([]sandbox.Snapshot, error) {
-	return nil, nil
+	var out []sandbox.Snapshot
+	prefix := n + ":"
+	for k, v := range f.snapshots {
+		if strings.HasPrefix(k, prefix) {
+			label := strings.TrimPrefix(k, prefix)
+			createdAt := time.Time{}
+			if t, ok := v.(time.Time); ok {
+				createdAt = t
+			}
+			out = append(out, sandbox.Snapshot{Label: label, CreatedAt: createdAt})
+		}
+	}
+	return out, nil
 }
 func (f *fakeSandbox) DeleteSnapshot(ctx context.Context, n, l string) error    { return nil }
 func (f *fakeSandbox) RestoreSnapshot(ctx context.Context, n, l string) error   { return nil }
 func (f *fakeSandbox) CloneFrom(ctx context.Context, src, lbl, nn string) error {
 	f.cloned = append(f.cloned, cloneRecord{source: src, label: lbl, newName: nn})
+	f.clonedNew = append(f.clonedNew, cloneCall{source: src, dest: nn})
+	if f.containers == nil {
+		f.containers = make(map[string]sandbox.Instance)
+	}
+	f.containers[nn] = sandbox.Instance{Name: nn, Status: sandbox.StatusRunning}
 	return nil
 }
 func (f *fakeSandbox) Run(ctx context.Context, n string, o sandbox.ExecOpts) (int, error) {
+	f.runs = append(f.runs, o.Cmd)
 	if f.runHook != nil {
 		return f.runHook(n, o)
 	}
@@ -214,7 +241,7 @@ func TestListBasesReturnsConfiguredBases(t *testing.T) {
 		},
 	}
 	tt.Builder = &Builder{}
-	fb.snapshots["px-base-python"] = "ready" // python is built; node is not
+	fb.snapshots["px-base-python:"+InitialCheckpointLabel] = time.Now() // python is built; node is not
 
 	out, err := tt.ListBases(context.Background(), EmptyIn{})
 	if err != nil {
@@ -289,11 +316,11 @@ func TestCreateSandboxWithBaseClonesFromSnapshot(t *testing.T) {
 	tt.BuildLockDir = t.TempDir()
 	tt.Builder = &Builder{}
 	tt.Builder.DoBuild = func(ctx context.Context, name string) error {
-		return BuildBase(ctx, tt.Backend, tt.Cfg, tt.Cfg.MCP.Bases[name], name, io.Discard)
+		return BuildBase(ctx, tt.Backend, tt.Cfg, name, tt.Cfg.MCP.Bases[name], io.Discard)
 	}
 
 	// Pretend the snapshot already exists for this test.
-	fb.snapshots[BaseName(tt.Cfg, "python")] = "ready"
+	fb.snapshots[BaseName(tt.Cfg, "python")+":"+InitialCheckpointLabel] = time.Now()
 
 	out, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{Base: "python"})
 	if err != nil {
@@ -327,13 +354,13 @@ func TestCreateSandboxSkipsBuildWhenBuilderExists(t *testing.T) {
 	tt.Builder = &Builder{
 		DoBuild: func(ctx context.Context, name string) error {
 			buildCalls++
-			return BuildBase(ctx, tt.Backend, tt.Cfg, tt.Cfg.MCP.Bases[name], name, io.Discard)
+			return BuildBase(ctx, tt.Backend, tt.Cfg, name, tt.Cfg.MCP.Bases[name], io.Discard)
 		},
 	}
 
 	// Arrange: builder container already exists in fake backend state (via created).
 	fb.created = append(fb.created, sandbox.CreateOpts{Name: BuilderContainerName("python")})
-	fb.snapshots[BaseName(tt.Cfg, "python")] = "ready"
+	fb.snapshots[BaseName(tt.Cfg, "python")+":"+InitialCheckpointLabel] = time.Now()
 
 	out, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{Base: "python"})
 	if err != nil {
