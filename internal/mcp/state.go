@@ -133,6 +133,18 @@ func (s *State) MarkRunning(name string) {
 	}
 }
 
+// SetIP updates a sandbox's IP address. No-op if missing.
+func (s *State) SetIP(name, ip string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.Sandboxes {
+		if s.data.Sandboxes[i].Name == name {
+			s.data.Sandboxes[i].IP = ip
+			return
+		}
+	}
+}
+
 // MarkFailed transitions a sandbox to "failed" and records the error message.
 func (s *State) MarkFailed(name string, err error) {
 	s.mu.Lock()

@@ -61,6 +61,10 @@ func (r *Reaper) tickOne(ctx context.Context, sb Sandbox, now time.Time) {
 }
 
 func (r *Reaper) applyTTL(ctx context.Context, sb Sandbox, now time.Time) {
+	// Don't reap during provisioning — the goroutine is still working.
+	if sb.Status == "provisioning" {
+		return
+	}
 	if now.Sub(sb.CreatedAt) > r.HardDestroyAfter {
 		if err := r.Backend.Delete(ctx, sb.Name); err != nil {
 			r.log().Error("destroy", "name", sb.Name, "err", err)

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/deevus/pixels/sandbox"
@@ -24,6 +25,8 @@ type Tools struct {
 	ExecTimeoutMax time.Duration
 	Log            *slog.Logger  // not nil; defaults to NopLogger if not set
 	Locks          *SandboxLocks // shared with Reaper; never nil after NewServer
+	DaemonCtx      context.Context // outlives any single request; provisioning goroutine inherits this
+	provisionWG    sync.WaitGroup // test affordance: tracks in-flight provisioning goroutines
 }
 
 func (t *Tools) log() *slog.Logger {
@@ -172,31 +175,76 @@ func (t *Tools) CreateSandbox(ctx context.Context, in CreateSandboxIn) (CreateSa
 		image = t.DefaultImage
 	}
 	name := t.generateName()
-	inst, err := t.Backend.Create(ctx, sandbox.CreateOpts{Name: name, Image: image})
-	if err != nil {
-		return CreateSandboxOut{}, fmt.Errorf("create: %w", err)
-	}
 	now := time.Now().UTC()
-	ip := ""
-	if len(inst.Addresses) > 0 {
-		ip = inst.Addresses[0]
-	}
+
 	t.State.Add(Sandbox{
 		Name:           name,
 		Label:          in.Label,
 		Image:          image,
-		IP:             ip,
-		Status:         "running",
+		Status:         "provisioning",
 		CreatedAt:      now,
 		LastActivityAt: now,
 	})
 	if err := t.persist(); err != nil {
-		// rollback in-memory state so the next call doesn't see a ghost
 		t.State.Remove(name)
-		// note: backend container still exists; the agent should retry destroy if they care
 		return CreateSandboxOut{}, fmt.Errorf("create %s: state save failed: %w", name, err)
 	}
-	return CreateSandboxOut{Name: name, IP: ip, Status: "running"}, nil
+
+	t.provisionWG.Add(1)
+	go func() {
+		defer t.provisionWG.Done()
+		t.provision(name, in)
+	}()
+
+	return CreateSandboxOut{Name: name, Status: "provisioning"}, nil
+}
+
+func (t *Tools) provision(name string, in CreateSandboxIn) {
+	m := t.Locks.For(name)
+	m.Lock()
+	defer m.Unlock()
+
+	// Re-check: a destroy_sandbox call may have run between request return
+	// and lock acquisition. If the sandbox is gone from state, exit cleanly.
+	if _, ok := t.State.Get(name); !ok {
+		t.log().Debug("provisioning aborted; sandbox already removed", "name", name)
+		return
+	}
+
+	ctx := t.DaemonCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	image := in.Image
+	if image == "" {
+		image = t.DefaultImage
+	}
+
+	inst, err := t.Backend.Create(ctx, sandbox.CreateOpts{Name: name, Image: image})
+	if err != nil {
+		t.log().Error("create failed", "name", name, "err", err)
+		t.State.MarkFailed(name, err)
+		_ = t.persist()
+		return
+	}
+
+	if err := t.Backend.Ready(ctx, name, 2*time.Minute); err != nil {
+		t.log().Error("ready timed out", "name", name, "err", err)
+		t.State.MarkFailed(name, err)
+		_ = t.persist()
+		return
+	}
+
+	if len(inst.Addresses) > 0 {
+		t.State.SetIP(name, inst.Addresses[0])
+	}
+	t.State.MarkRunning(name)
+	t.State.BumpActivity(name, time.Now().UTC())
+	if ctx.Err() == nil {
+		_ = t.persist()
+	}
+	t.log().Info("provisioning complete", "name", name)
 }
 
 func (t *Tools) DestroySandbox(ctx context.Context, in SandboxRef) (Ack, error) {

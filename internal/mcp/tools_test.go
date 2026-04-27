@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,18 +14,37 @@ import (
 )
 
 type fakeSandbox struct {
-	created []sandbox.CreateOpts
-	deleted []string
-	stopped []string
-	started []string
-	files   map[string][]byte
-	runHook func(name string, opts sandbox.ExecOpts) (int, error)
+	mu         sync.Mutex
+	created    []sandbox.CreateOpts
+	deleted    []string
+	stopped    []string
+	started    []string
+	files      map[string][]byte
+	runHook    func(name string, opts sandbox.ExecOpts) (int, error)
+	createHook func(o sandbox.CreateOpts) (*sandbox.Instance, error)
 }
 
 func newFakeSandbox() *fakeSandbox { return &fakeSandbox{files: make(map[string][]byte)} }
 
+func (f *fakeSandbox) lenCreated() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.created)
+}
+
+func (f *fakeSandbox) getCreated(i int) sandbox.CreateOpts {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.created[i]
+}
+
 func (f *fakeSandbox) Create(ctx context.Context, o sandbox.CreateOpts) (*sandbox.Instance, error) {
+	f.mu.Lock()
 	f.created = append(f.created, o)
+	f.mu.Unlock()
+	if f.createHook != nil {
+		return f.createHook(o)
+	}
 	return &sandbox.Instance{Name: o.Name, Status: sandbox.StatusRunning, Addresses: []string{"10.0.0.1"}}, nil
 }
 func (f *fakeSandbox) Get(ctx context.Context, n string) (*sandbox.Instance, error) {
@@ -106,7 +126,9 @@ func newTestTools(t *testing.T) (*Tools, *fakeSandbox) {
 	dir := t.TempDir()
 	s, _ := LoadState(filepath.Join(dir, "s.json"))
 	be := newFakeSandbox()
-	return &Tools{
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tt := &Tools{
 		State:          s,
 		Backend:        be,
 		Prefix:         "px-mcp-",
@@ -114,7 +136,61 @@ func newTestTools(t *testing.T) (*Tools, *fakeSandbox) {
 		ExecTimeoutMax: 10 * time.Minute,
 		Log:            NopLogger(),
 		Locks:          &SandboxLocks{},
-	}, be
+		DaemonCtx:      ctx,
+	}
+	t.Cleanup(func() {
+		cancel()
+		tt.provisionWG.Wait()
+	})
+	return tt, be
+}
+
+func mustEventually(t *testing.T, fn func() bool) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		if fn() {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("condition never became true")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestCreateSandboxReturnsImmediatelyWithProvisioning(t *testing.T) {
+	ctx := context.Background()
+	tt, fb := newTestTools(t)
+
+	// Stub the backend's Create to block — simulates a slow provision.
+	createReturn := make(chan struct{})
+	fb.createHook = func(o sandbox.CreateOpts) (*sandbox.Instance, error) {
+		<-createReturn
+		return &sandbox.Instance{Name: o.Name, Status: sandbox.StatusRunning, Addresses: []string{"10.0.0.1"}}, nil
+	}
+
+	tt.DaemonCtx = ctx
+
+	start := time.Now()
+	out, err := tt.CreateSandbox(ctx, CreateSandboxIn{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := time.Since(start); got > 100*time.Millisecond {
+		t.Errorf("CreateSandbox took %v; should return immediately", got)
+	}
+	if out.Status != "provisioning" {
+		t.Errorf("Status = %q, want provisioning", out.Status)
+	}
+
+	// Unblock the backend; goroutine should now flip status to running.
+	close(createReturn)
+	mustEventually(t, func() bool {
+		got, _ := tt.State.Get(out.Name)
+		return got.Status == "running"
+	})
 }
 
 func TestCreateSandboxPropagatesSaveError(t *testing.T) {
@@ -129,10 +205,10 @@ func TestCreateSandboxPropagatesSaveError(t *testing.T) {
 	if got := len(tt.State.Sandboxes()); got != 0 {
 		t.Errorf("state should be empty after save failure; got %d", got)
 	}
-	// Rollback semantics: backend container was created but in-memory state
-	// was rolled back so a retry won't see a phantom.
-	if len(be.created) != 1 {
-		t.Errorf("backend.Create should have been called exactly once; got %d", len(be.created))
+	// With async provisioning, no backend call happens synchronously.
+	// The save failure prevents the goroutine from launching.
+	if n := be.lenCreated(); n != 0 {
+		t.Errorf("backend.Create should not have been called synchronously; got %d", n)
 	}
 }
 
@@ -230,10 +306,14 @@ func TestCreateSandboxAddsState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Name == "" || out.Status != "running" {
+	if out.Name == "" || out.Status != "provisioning" {
 		t.Errorf("unexpected out: %+v", out)
 	}
-	if len(be.created) != 1 || be.created[0].Image != "ubuntu/24.04" {
+	// Wait for provisioning to finish.
+	mustEventually(t, func() bool {
+		return be.lenCreated() >= 1
+	})
+	if be.getCreated(0).Image != "ubuntu/24.04" {
 		t.Errorf("unexpected create call: %+v", be.created)
 	}
 	if _, ok := tt.State.Get(out.Name); !ok {

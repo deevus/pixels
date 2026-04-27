@@ -19,6 +19,7 @@ type ServerOpts struct {
 	ExecTimeoutMax time.Duration
 	Log            *slog.Logger
 	Locks          *SandboxLocks // shared with Reaper; constructed by caller
+	DaemonCtx      context.Context // outlives any single request; provisioning goroutine inherits this
 }
 
 // NewServer wires the MCP tool surface and returns an HTTP handler ready to mount.
@@ -42,6 +43,8 @@ func NewServer(opts ServerOpts, endpointPath string) (http.Handler, *Tools) {
 		Log:            log,
 		Locks:          locks,
 	}
+
+	tools.DaemonCtx = opts.DaemonCtx
 
 	srv := sdk.NewServer(&sdk.Implementation{Name: "pixels-mcp", Version: "0.1.0"}, nil)
 

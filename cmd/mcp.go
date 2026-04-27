@@ -94,6 +94,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		ExecTimeoutMax: execMax,
 		Log:            log,
 		Locks:          locks,
+		DaemonCtx:      ctx,
 	}, cfg.MCP.EndpointPath)
 
 	reaper := &mcppkg.Reaper{
