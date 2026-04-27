@@ -7,7 +7,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/briandowns/spinner v1.23.2
 	github.com/caarlos0/env/v11 v11.4.0
-	github.com/deevus/truenas-go v0.4.0
+	github.com/deevus/truenas-go v0.5.0
 	github.com/dustin/go-humanize v1.0.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/lxc/incus/v6 v6.22.0
