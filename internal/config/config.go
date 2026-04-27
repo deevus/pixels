@@ -44,17 +44,24 @@ type TrueNAS struct {
 	InsecureSkipVerify *bool  `toml:"insecure_skip_verify" env:"PIXELS_TRUENAS_INSECURE"`
 }
 
+type Base struct {
+	ParentImage string `toml:"parent_image"`
+	SetupScript string `toml:"setup_script"`
+	Description string `toml:"description"`
+}
+
 type MCP struct {
-	Prefix           string `toml:"prefix"             env:"PIXELS_MCP_PREFIX"`
-	DefaultImage     string `toml:"default_image"      env:"PIXELS_MCP_DEFAULT_IMAGE"`
-	IdleStopAfter    string `toml:"idle_stop_after"    env:"PIXELS_MCP_IDLE_STOP_AFTER"`
-	HardDestroyAfter string `toml:"hard_destroy_after" env:"PIXELS_MCP_HARD_DESTROY_AFTER"`
-	ReapInterval     string `toml:"reap_interval"      env:"PIXELS_MCP_REAP_INTERVAL"`
-	StateFile        string `toml:"state_file"         env:"PIXELS_MCP_STATE_FILE"`
-	PIDFile          string `toml:"pid_file"           env:"PIXELS_MCP_PID_FILE"`
-	ExecTimeoutMax   string `toml:"exec_timeout_max"   env:"PIXELS_MCP_EXEC_TIMEOUT_MAX"`
-	ListenAddr       string `toml:"listen_addr"        env:"PIXELS_MCP_LISTEN_ADDR"`
-	EndpointPath     string `toml:"endpoint_path"      env:"PIXELS_MCP_ENDPOINT_PATH"`
+	Prefix           string          `toml:"prefix"             env:"PIXELS_MCP_PREFIX"`
+	DefaultImage     string          `toml:"default_image"      env:"PIXELS_MCP_DEFAULT_IMAGE"`
+	IdleStopAfter    string          `toml:"idle_stop_after"    env:"PIXELS_MCP_IDLE_STOP_AFTER"`
+	HardDestroyAfter string          `toml:"hard_destroy_after" env:"PIXELS_MCP_HARD_DESTROY_AFTER"`
+	ReapInterval     string          `toml:"reap_interval"      env:"PIXELS_MCP_REAP_INTERVAL"`
+	StateFile        string          `toml:"state_file"         env:"PIXELS_MCP_STATE_FILE"`
+	PIDFile          string          `toml:"pid_file"           env:"PIXELS_MCP_PID_FILE"`
+	ExecTimeoutMax   string          `toml:"exec_timeout_max"   env:"PIXELS_MCP_EXEC_TIMEOUT_MAX"`
+	ListenAddr       string          `toml:"listen_addr"        env:"PIXELS_MCP_LISTEN_ADDR"`
+	EndpointPath     string          `toml:"endpoint_path"      env:"PIXELS_MCP_ENDPOINT_PATH"`
+	Bases            map[string]Base `toml:"bases"`
 }
 
 type Defaults struct {
@@ -161,6 +168,11 @@ func Load() (*Config, error) {
 	cfg.Incus.ClientCert = expandHome(cfg.Incus.ClientCert)
 	cfg.Incus.ClientKey = expandHome(cfg.Incus.ClientKey)
 	cfg.Incus.ServerCert = expandHome(cfg.Incus.ServerCert)
+
+	for name, b := range cfg.MCP.Bases {
+		b.SetupScript = expandHome(b.SetupScript)
+		cfg.MCP.Bases[name] = b
+	}
 
 	if err := resolveEnv(cfg); err != nil {
 		return nil, err

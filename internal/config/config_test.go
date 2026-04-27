@@ -662,6 +662,45 @@ func TestMCPStateFilePathOverride(t *testing.T) {
 	}
 }
 
+func TestMCPBasesParsed(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`
+[mcp.bases.python]
+parent_image = "images:ubuntu/24.04"
+setup_script = "~/scripts/python.sh"
+description = "Python 3"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, ok := cfg.MCP.Bases["python"]
+	if !ok {
+		t.Fatalf("python base not parsed; got %+v", cfg.MCP.Bases)
+	}
+	if b.ParentImage != "images:ubuntu/24.04" {
+		t.Errorf("ParentImage = %q", b.ParentImage)
+	}
+	if b.Description != "Python 3" {
+		t.Errorf("Description = %q", b.Description)
+	}
+	// SetupScript should have ~ expanded.
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, "scripts/python.sh")
+	if b.SetupScript != want {
+		t.Errorf("SetupScript = %q, want %q (expanded)", b.SetupScript, want)
+	}
+}
+
 func TestMCPPIDFilePath(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
