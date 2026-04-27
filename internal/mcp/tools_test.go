@@ -13,6 +13,12 @@ import (
 	"github.com/deevus/pixels/sandbox"
 )
 
+type cloneRecord struct {
+	source  string
+	label   string
+	newName string
+}
+
 type fakeSandbox struct {
 	mu         sync.Mutex
 	created    []sandbox.CreateOpts
@@ -22,9 +28,16 @@ type fakeSandbox struct {
 	files      map[string][]byte
 	runHook    func(name string, opts sandbox.ExecOpts) (int, error)
 	createHook func(o sandbox.CreateOpts) (*sandbox.Instance, error)
+	snapshots  map[string]string // snapName → ready
+	cloned     []cloneRecord
 }
 
-func newFakeSandbox() *fakeSandbox { return &fakeSandbox{files: make(map[string][]byte)} }
+func newFakeSandbox() *fakeSandbox {
+	return &fakeSandbox{
+		files:     make(map[string][]byte),
+		snapshots: make(map[string]string),
+	}
+}
 
 func (f *fakeSandbox) lenCreated() int {
 	f.mu.Lock()
@@ -54,13 +67,22 @@ func (f *fakeSandbox) List(ctx context.Context) ([]sandbox.Instance, error) { re
 func (f *fakeSandbox) Start(ctx context.Context, n string) error            { f.started = append(f.started, n); return nil }
 func (f *fakeSandbox) Stop(ctx context.Context, n string) error             { f.stopped = append(f.stopped, n); return nil }
 func (f *fakeSandbox) Delete(ctx context.Context, n string) error           { f.deleted = append(f.deleted, n); return nil }
-func (f *fakeSandbox) CreateSnapshot(ctx context.Context, n, l string) error { return nil }
+func (f *fakeSandbox) CreateSnapshot(ctx context.Context, n, l string) error {
+	if f.snapshots == nil {
+		f.snapshots = make(map[string]string)
+	}
+	f.snapshots[l] = "ready"
+	return nil
+}
 func (f *fakeSandbox) ListSnapshots(ctx context.Context, n string) ([]sandbox.Snapshot, error) {
 	return nil, nil
 }
 func (f *fakeSandbox) DeleteSnapshot(ctx context.Context, n, l string) error    { return nil }
 func (f *fakeSandbox) RestoreSnapshot(ctx context.Context, n, l string) error   { return nil }
-func (f *fakeSandbox) CloneFrom(ctx context.Context, src, lbl, nn string) error { return nil }
+func (f *fakeSandbox) CloneFrom(ctx context.Context, src, lbl, nn string) error {
+	f.cloned = append(f.cloned, cloneRecord{source: src, label: lbl, newName: nn})
+	return nil
+}
 func (f *fakeSandbox) Run(ctx context.Context, n string, o sandbox.ExecOpts) (int, error) {
 	if f.runHook != nil {
 		return f.runHook(n, o)
