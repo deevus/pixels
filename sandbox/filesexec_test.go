@@ -88,6 +88,32 @@ func TestFilesViaExecReadFileFull(t *testing.T) {
 	}
 }
 
+func TestFilesViaExecReadFileTruncatedOnStatError(t *testing.T) {
+	fe := &fakeExec{
+		runResp: func(opts ExecOpts) (int, error) {
+			if opts.Stdout != nil && len(opts.Cmd) > 0 && opts.Cmd[0] == "head" {
+				_, _ = opts.Stdout.Write(bytes.Repeat([]byte("x"), 4))
+			}
+			return 0, nil
+		},
+		outputResp: func(cmd []string) ([]byte, error) {
+			return nil, errors.New("stat: not allowed")
+		},
+	}
+	files := FilesViaExec{Exec: fe}
+
+	got, truncated, err := files.ReadFile(context.Background(), "sb", "/tmp/f", 4)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !truncated {
+		t.Errorf("expected truncated=true when stat fails and read length == maxBytes")
+	}
+	if string(got) != "xxxx" {
+		t.Errorf("got %q, want xxxx", got)
+	}
+}
+
 func TestFilesViaExecReadFileTruncated(t *testing.T) {
 	fe := &fakeExec{
 		runResp: func(opts ExecOpts) (int, error) {

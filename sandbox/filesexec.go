@@ -78,10 +78,13 @@ func (f FilesViaExec) ReadFile(ctx context.Context, name, p string, maxBytes int
 	truncated := false
 	if maxBytes > 0 && int64(buf.Len()) >= maxBytes {
 		out, err := f.Exec.Output(ctx, name, []string{"stat", "-c", "%s", "--", p})
-		if err == nil {
-			if size, perr := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64); perr == nil && size > maxBytes {
-				truncated = true
-			}
+		if err != nil {
+			// stat failed; conservatively assume truncation. We read exactly
+			// maxBytes, so the file is at least that big — treating it as
+			// truncated is safe and visible to the caller.
+			truncated = true
+		} else if size, perr := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64); perr == nil && size > maxBytes {
+			truncated = true
 		}
 	}
 	return buf.Bytes(), truncated, nil
