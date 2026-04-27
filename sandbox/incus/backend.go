@@ -428,7 +428,7 @@ func (i *Incus) SnapshotExists(ctx context.Context, instanceName, label string) 
 	snaps, err := i.ListSnapshots(ctx, instanceName)
 	if err != nil {
 		// Treat instance-not-found as "no snapshot exists" — non-fatal.
-		if errors.Is(wrapNotFound(err), sandbox.ErrNotFound) {
+		if errors.Is(sandbox.WrapNotFound(err), sandbox.ErrNotFound) {
 			return false, nil
 		}
 		return false, err
