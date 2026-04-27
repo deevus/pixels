@@ -83,9 +83,10 @@ type ExecIn struct {
 	TimeoutSec int               `json:"timeout_sec,omitempty"`
 }
 type ExecOut struct {
-	ExitCode int    `json:"exit_code"`
-	Stdout   string `json:"stdout"`
-	Stderr   string `json:"stderr"`
+	ExitCode       int    `json:"exit_code"`
+	Stdout         string `json:"stdout"`
+	Stderr         string `json:"stderr"`
+	TransportError string `json:"transport_error,omitempty"` // non-empty when the underlying SSH/exec channel failed
 }
 
 type WriteFileIn struct {
@@ -301,8 +302,8 @@ func (t *Tools) Exec(ctx context.Context, in ExecIn) (ExecOut, error) {
 		Stdout:   stdout.String(),
 		Stderr:   stderr.String(),
 	}
-	if err != nil && exit == 0 {
-		return out, err
+	if err != nil {
+		out.TransportError = err.Error()
 	}
 	return out, nil
 }

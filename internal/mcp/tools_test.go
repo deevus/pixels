@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -57,6 +58,19 @@ func (f *fakeSandbox) GetPolicy(ctx context.Context, n string) (*sandbox.Policy,
 func (f *fakeSandbox) Capabilities() sandbox.Capabilities { return sandbox.Capabilities{} }
 func (f *fakeSandbox) Close() error                       { return nil }
 
+// errBackend wraps a fakeSandbox and returns an error from Run.
+type errBackend struct {
+	*fakeSandbox
+	runErr error
+}
+
+func (e *errBackend) Run(ctx context.Context, name string, opts sandbox.ExecOpts) (int, error) {
+	if opts.Stdout != nil {
+		_, _ = opts.Stdout.Write([]byte("partial-stdout"))
+	}
+	return 137, e.runErr
+}
+
 // Files capability (in-memory implementations so EditFile etc. round-trip).
 func (f *fakeSandbox) WriteFile(ctx context.Context, name, path string, content []byte, mode os.FileMode) error {
 	cp := make([]byte, len(content))
@@ -109,6 +123,32 @@ func TestCreateSandboxPropagatesSaveError(t *testing.T) {
 	}
 	if got := len(tt.State.Sandboxes()); got != 0 {
 		t.Errorf("state should be empty after save failure; got %d", got)
+	}
+}
+
+func TestExecReportsTransportError(t *testing.T) {
+	tt, _ := newTestTools(t)
+	tt.Backend = &errBackend{
+		fakeSandbox: tt.Backend.(*fakeSandbox),
+		runErr:      errors.New("ssh connection lost"),
+	}
+	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+
+	res, err := tt.Exec(context.Background(), ExecIn{
+		Name:    out.Name,
+		Command: []string{"true"},
+	})
+	if err != nil {
+		t.Fatalf("Exec returned err=%v; expected the error in the response field instead", err)
+	}
+	if res.TransportError == "" {
+		t.Errorf("expected non-empty TransportError; got %+v", res)
+	}
+	if res.ExitCode != 137 {
+		t.Errorf("expected ExitCode propagated; got %d", res.ExitCode)
+	}
+	if res.Stdout != "partial-stdout" {
+		t.Errorf("expected partial Stdout preserved; got %q", res.Stdout)
 	}
 }
 
