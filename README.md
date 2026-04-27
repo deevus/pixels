@@ -385,7 +385,7 @@ Add your own in config. Each base must declare exactly one of `parent_image` or 
 
 ```toml
 [mcp.bases.rust]
-parent_image = "images:ubuntu/24.04"
+parent_image = "ubuntu/24.04"
 setup_script = "~/.config/pixels/bases/rust.sh"
 description  = "Rust toolchain"
 ```
@@ -439,7 +439,7 @@ Example `pixels base list` output:
 ```
 $ pixels base list
 NAME    FROM/IMAGE              STATUS  LAST_CHECKPOINT       DESCRIPTION
-dev     images:ubuntu/24.04     ready   2026-04-27 12:30:00   Ubuntu 24.04 + git, curl, vim, ...
+dev     ubuntu/24.04            ready   2026-04-27 12:30:00   Ubuntu 24.04 + git, curl, vim, ...
 node    dev                     missing                       dev + Node 22 LTS, npm
 python  dev                     ready   2026-04-27 12:35:00   dev + python3, pip, pipx, venv
 ```

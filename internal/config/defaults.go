@@ -6,7 +6,7 @@ package config
 // stay in internal/mcp/defaults.go via //go:embed.
 var DefaultBases = map[string]Base{
 	"dev": {
-		ParentImage: "images:ubuntu/24.04",
+		ParentImage: "ubuntu/24.04",
 		SetupScript: "mcp:bases/dev.sh",
 		Description: "Ubuntu 24.04 + git, curl, wget, jq, vim, build-essential",
 	},
