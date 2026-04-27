@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -112,6 +113,33 @@ func TestStateLoadCorrupt(t *testing.T) {
 	}
 	if got := len(s.Sandboxes()); got != 0 {
 		t.Errorf("Sandboxes = %d, want 0 after corrupt load", got)
+	}
+}
+
+func TestStateMarkProvisioning(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := LoadState(filepath.Join(dir, "s.json"))
+	now := time.Now().UTC()
+	s.Add(Sandbox{
+		Name:           "p",
+		Status:         "provisioning",
+		CreatedAt:      now,
+		LastActivityAt: now,
+	})
+
+	s.MarkRunning("p")
+	got, _ := s.Get("p")
+	if got.Status != "running" {
+		t.Errorf("status = %q, want running", got.Status)
+	}
+
+	s.MarkFailed("p", errors.New("boom"))
+	got, _ = s.Get("p")
+	if got.Status != "failed" {
+		t.Errorf("status = %q, want failed", got.Status)
+	}
+	if got.Error != "boom" {
+		t.Errorf("error = %q, want boom", got.Error)
 	}
 }
 

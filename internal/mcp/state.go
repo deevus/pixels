@@ -18,8 +18,10 @@ type Sandbox struct {
 	Name           string    `json:"name"`
 	Label          string    `json:"label,omitempty"`
 	Image          string    `json:"image"`
+	Base           string    `json:"base,omitempty"`            // name of the base, if cloned
 	IP             string    `json:"ip,omitempty"`
-	Status         string    `json:"status"` // "running" | "stopped"
+	Status         string    `json:"status"` // "provisioning" | "running" | "stopped" | "failed"
+	Error          string    `json:"error,omitempty"`           // populated when status=failed
 	CreatedAt      time.Time `json:"created_at"`
 	LastActivityAt time.Time `json:"last_activity_at"`
 }
@@ -113,6 +115,34 @@ func (s *State) BumpActivity(name string, t time.Time) {
 	for i := range s.data.Sandboxes {
 		if s.data.Sandboxes[i].Name == name {
 			s.data.Sandboxes[i].LastActivityAt = t
+			return
+		}
+	}
+}
+
+// MarkRunning transitions a sandbox to "running" and clears any prior error.
+func (s *State) MarkRunning(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.Sandboxes {
+		if s.data.Sandboxes[i].Name == name {
+			s.data.Sandboxes[i].Status = "running"
+			s.data.Sandboxes[i].Error = ""
+			return
+		}
+	}
+}
+
+// MarkFailed transitions a sandbox to "failed" and records the error message.
+func (s *State) MarkFailed(name string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.data.Sandboxes {
+		if s.data.Sandboxes[i].Name == name {
+			s.data.Sandboxes[i].Status = "failed"
+			if err != nil {
+				s.data.Sandboxes[i].Error = err.Error()
+			}
 			return
 		}
 	}
