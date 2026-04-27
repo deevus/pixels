@@ -181,7 +181,65 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
+	if err := validateBases(cfg.MCP.Bases); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// validateBases checks that every [mcp.bases] entry declares exactly one of
+// parent_image or from, that every from references an existing base, and
+// that the dependency graph has no cycles.
+func validateBases(bases map[string]Base) error {
+	if len(bases) == 0 {
+		return nil
+	}
+	for name, b := range bases {
+		hasParent := b.ParentImage != ""
+		hasFrom := b.From != ""
+		if hasParent && hasFrom {
+			return fmt.Errorf("mcp.bases.%s: parent_image and from are mutually exclusive", name)
+		}
+		if !hasParent && !hasFrom {
+			return fmt.Errorf("mcp.bases.%s: must declare exactly one of parent_image or from", name)
+		}
+		if hasFrom {
+			if _, ok := bases[b.From]; !ok {
+				return fmt.Errorf("mcp.bases.%s: from references unknown base %q", name, b.From)
+			}
+		}
+	}
+	// Cycle detection via DFS with white/gray/black coloring.
+	const (
+		white = 0
+		gray  = 1
+		black = 2
+	)
+	colour := make(map[string]int, len(bases))
+	var visit func(name, path string) error
+	visit = func(name, path string) error {
+		switch colour[name] {
+		case gray:
+			return fmt.Errorf("mcp.bases: cycle detected: %s -> %s", path, name)
+		case black:
+			return nil
+		}
+		colour[name] = gray
+		if from := bases[name].From; from != "" {
+			if err := visit(from, path+" -> "+name); err != nil {
+				return err
+			}
+		}
+		colour[name] = black
+		return nil
+	}
+	for name := range bases {
+		if err := visit(name, ""); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // resolveEnv splits RawEnv entries into image vars (Env) and session vars (EnvForward).

@@ -790,3 +790,99 @@ description = "Python"
 		t.Errorf("dev.ParentImage = %q", got)
 	}
 }
+
+func TestBaseRejectsBothParentImageAndFrom(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`
+[mcp.bases.bad]
+parent_image = "images:ubuntu/24.04"
+from = "dev"
+setup_script = "/tmp/x.sh"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load to error on base with both parent_image and from")
+	}
+}
+
+func TestBaseRejectsNeitherParentImageNorFrom(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	_ = os.WriteFile(cfgPath, []byte(`
+[mcp.bases.bad]
+setup_script = "/tmp/x.sh"
+`), 0o644)
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load to error on base with neither parent_image nor from")
+	}
+}
+
+func TestBaseRejectsFromMissingTarget(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	_ = os.WriteFile(cfgPath, []byte(`
+[mcp.bases.python]
+from = "doesnotexist"
+setup_script = "/tmp/x.sh"
+`), 0o644)
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load to error on base whose from references a missing base")
+	}
+}
+
+func TestBaseRejectsCycle(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	_ = os.WriteFile(cfgPath, []byte(`
+[mcp.bases.a]
+from = "b"
+setup_script = "/tmp/x.sh"
+
+[mcp.bases.b]
+from = "a"
+setup_script = "/tmp/x.sh"
+`), 0o644)
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load to error on base cycle")
+	}
+}
+
+func TestBaseAcceptsValidChain(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	_ = os.WriteFile(cfgPath, []byte(`
+[mcp.bases.dev]
+parent_image = "images:ubuntu/24.04"
+setup_script = "/tmp/dev.sh"
+
+[mcp.bases.python]
+from = "dev"
+setup_script = "/tmp/python.sh"
+
+[mcp.bases.django]
+from = "python"
+setup_script = "/tmp/django.sh"
+`), 0o644)
+	_, err := Load()
+	if err != nil {
+		t.Fatalf("expected valid chain to load, got: %v", err)
+	}
+}
