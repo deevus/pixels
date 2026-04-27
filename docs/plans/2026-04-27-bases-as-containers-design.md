@@ -122,10 +122,15 @@ Env-var override: `PIXELS_MCP_BASE_PREFIX`.
 | Command | Action |
 |---|---|
 | `pixels base list` | Show declared bases + status, including the most-recent checkpoint timestamp. |
-| `pixels base build <name>` | Cascade-build the dep chain. Stops at the end with the initial checkpoint created. |
-| `pixels base delete <name>` | Destroy the base container + all its checkpoints. Refuses if any other base has `from = <name>`. Existing sandbox clones survive (independent containers). |
+| `pixels base build <name>` | Cascade-build the dep chain. If any link in the chain is missing (e.g. `dev` was destroyed), it gets rebuilt from its config first. Stops at the end with the initial checkpoint created. |
 
-**No `commit`, no `modify` command.** Customisation uses existing `pixels start` / `pixels exec` / `pixels stop`. Publishing uses existing `pixels checkpoint create <base>`. Discoverability via README.
+**No `delete`, `commit`, or `modify` command.**
+
+- **Deletion** uses existing `pixels destroy <base-container-name>`. If a user destroys `dev` while `python` exists, the python container still works (independent ZFS container from when it was built). Future `pixels base build python` triggers cascade-rebuild of dev automatically — no manual ordering required.
+- **Customisation** uses existing `pixels start` / `pixels exec` / `pixels stop`.
+- **Publishing** uses existing `pixels checkpoint create <base-container-name>`.
+
+Discoverability via README. New CLI surface is two verbs total.
 
 ### Code changes
 
@@ -152,7 +157,7 @@ Env-var override: `PIXELS_MCP_BASE_PREFIX`.
 ### Edge cases
 
 - **No checkpoint yet but container exists.** Should not happen post-build (`BuildBase` always creates an initial checkpoint). If it happens (manual deletion), `create_sandbox(base="X")` fails with a clear error: "base X has no checkpoints — run `pixels checkpoint create <base_prefix>X` after publishing your changes."
-- **Mutation propagation gotcha.** If user mutates `dev`, changes do NOT auto-flow into `python` or `node`. Both were built when `dev` was at its prior state. To propagate: `pixels base delete python && pixels base build python` (or just delete; daemon rebuilds on next `create_sandbox`). Documented in README. Same semantics as Docker layered images.
+- **Mutation propagation gotcha.** If user mutates `dev`, changes do NOT auto-flow into `python` or `node`. Both were built when `dev` was at its prior state. To propagate: `pixels destroy px-base-python && pixels base build python` (or just destroy; daemon cascade-rebuilds on next `create_sandbox`). Documented in README. Same semantics as Docker layered images.
 - **Failing dependency.** If `dev` build fails, `python` cascade short-circuits with the dev failure. `Builder.failureTTL` (10-min) caches dev's failure; subsequent `create_sandbox(base="python")` calls return the cached failure immediately. Cache clears on successful retry.
 - **Default replaced by user config.** User's `[mcp.bases.python]` fully wins — no field merge.
 - **Reaper exclusion.** Bases live forever (until `pixels base delete`). Reaper already ignores names matching the configured base prefix; this stays.
