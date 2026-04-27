@@ -5,10 +5,16 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"time"
 )
+
+// ErrNotFound is returned (wrapped) by backend operations when the target
+// instance or snapshot does not exist. Callers can use errors.Is to
+// disambiguate from other errors.
+var ErrNotFound = errors.New("sandbox: not found")
 
 // Backend manages the lifecycle of sandbox instances and their snapshots.
 type Backend interface {

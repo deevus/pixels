@@ -277,7 +277,7 @@ func (t *TrueNAS) SnapshotExists(ctx context.Context, instanceName, label string
 	snaps, err := t.ListSnapshots(ctx, instanceName)
 	if err != nil {
 		// Treat instance-not-found as "no snapshot exists" — non-fatal.
-		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "Not Found") {
+		if errors.Is(wrapNotFound(err), sandbox.ErrNotFound) {
 			return false, nil
 		}
 		return false, err
