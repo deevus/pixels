@@ -579,6 +579,70 @@ func TestKnownHostsPath(t *testing.T) {
 	}
 }
 
+func TestMCPDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if got, want := cfg.MCP.Prefix, "px-mcp-"; got != want {
+		t.Errorf("Prefix = %q, want %q", got, want)
+	}
+	if got, want := cfg.MCP.IdleStopAfter, "1h"; got != want {
+		t.Errorf("IdleStopAfter = %q, want %q", got, want)
+	}
+	if got, want := cfg.MCP.HardDestroyAfter, "24h"; got != want {
+		t.Errorf("HardDestroyAfter = %q, want %q", got, want)
+	}
+	if got, want := cfg.MCP.ListenAddr, "127.0.0.1:8765"; got != want {
+		t.Errorf("ListenAddr = %q, want %q", got, want)
+	}
+}
+
+func TestMCPEnvOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Setenv("PIXELS_MCP_LISTEN_ADDR", "0.0.0.0:9000")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.MCP.ListenAddr, "0.0.0.0:9000"; got != want {
+		t.Errorf("ListenAddr = %q, want %q", got, want)
+	}
+}
+
+func TestMCPTOMLOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`
+[mcp]
+prefix = "test-"
+idle_stop_after = "30m"
+`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.MCP.Prefix, "test-"; got != want {
+		t.Errorf("Prefix = %q, want %q", got, want)
+	}
+	if got, want := cfg.MCP.IdleStopAfter, "30m"; got != want {
+		t.Errorf("IdleStopAfter = %q, want %q", got, want)
+	}
+}
+
 func TestExpandHome(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {

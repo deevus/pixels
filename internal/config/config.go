@@ -19,6 +19,7 @@ type Config struct {
 	Checkpoint Checkpoint     `toml:"checkpoint"`
 	Provision  Provision      `toml:"provision"`
 	Network    Network        `toml:"network"`
+	MCP        MCP            `toml:"mcp"`
 	RawEnv     map[string]any `toml:"env"`
 
 	// Resolved env vars (not from TOML directly).
@@ -41,6 +42,19 @@ type TrueNAS struct {
 	Username           string `toml:"username"            env:"PIXELS_TRUENAS_USERNAME"`
 	APIKey             string `toml:"api_key"             env:"PIXELS_TRUENAS_API_KEY"`
 	InsecureSkipVerify *bool  `toml:"insecure_skip_verify" env:"PIXELS_TRUENAS_INSECURE"`
+}
+
+type MCP struct {
+	Prefix           string `toml:"prefix"             env:"PIXELS_MCP_PREFIX"`
+	DefaultImage     string `toml:"default_image"      env:"PIXELS_MCP_DEFAULT_IMAGE"`
+	IdleStopAfter    string `toml:"idle_stop_after"    env:"PIXELS_MCP_IDLE_STOP_AFTER"`
+	HardDestroyAfter string `toml:"hard_destroy_after" env:"PIXELS_MCP_HARD_DESTROY_AFTER"`
+	ReapInterval     string `toml:"reap_interval"      env:"PIXELS_MCP_REAP_INTERVAL"`
+	StateFile        string `toml:"state_file"         env:"PIXELS_MCP_STATE_FILE"`
+	PIDFile          string `toml:"pid_file"           env:"PIXELS_MCP_PID_FILE"`
+	ExecTimeoutMax   string `toml:"exec_timeout_max"   env:"PIXELS_MCP_EXEC_TIMEOUT_MAX"`
+	ListenAddr       string `toml:"listen_addr"        env:"PIXELS_MCP_LISTEN_ADDR"`
+	EndpointPath     string `toml:"endpoint_path"      env:"PIXELS_MCP_ENDPOINT_PATH"`
 }
 
 type Defaults struct {
@@ -119,6 +133,15 @@ func Load() (*Config, error) {
 		},
 		Network: Network{
 			Egress: "unrestricted",
+		},
+		MCP: MCP{
+			Prefix:           "px-mcp-",
+			IdleStopAfter:    "1h",
+			HardDestroyAfter: "24h",
+			ReapInterval:     "1m",
+			ExecTimeoutMax:   "10m",
+			ListenAddr:       "127.0.0.1:8765",
+			EndpointPath:     "/mcp",
 		},
 	}
 
