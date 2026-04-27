@@ -178,7 +178,7 @@ Expected: PASS, build clean.
 
 ```bash
 git add internal/config/config.go internal/config/config_test.go
-git commit -m "feat(config): add [mcp] config section with defaults"
+jj commit -m "feat(config): add [mcp] config section with defaults"
 ```
 
 ---
@@ -278,7 +278,7 @@ Expected: PASS.
 
 ```bash
 git add internal/config/config.go internal/config/config_test.go
-git commit -m "feat(config): add MCPStateFile/MCPPIDFile path helpers"
+jj commit -m "feat(config): add MCPStateFile/MCPPIDFile path helpers"
 ```
 
 ---
@@ -545,7 +545,7 @@ Expected: PASS.
 
 ```bash
 git add internal/mcp/
-git commit -m "feat(mcp): add State type with in-memory + JSON persistence"
+jj commit -m "feat(mcp): add State type with in-memory + JSON persistence"
 ```
 
 ---
@@ -626,7 +626,7 @@ Expected: PASS.
 
 ```bash
 git add internal/mcp/state_test.go
-git commit -m "test(mcp): cover atomic save and corrupt-state recovery"
+jj commit -m "test(mcp): cover atomic save and corrupt-state recovery"
 ```
 
 ---
@@ -785,7 +785,7 @@ Expected: PASS.
 
 ```bash
 git add internal/mcp/
-git commit -m "feat(mcp): add pidfile with stale-PID detection"
+jj commit -m "feat(mcp): add pidfile with stale-PID detection"
 ```
 
 ---
@@ -1183,7 +1183,7 @@ Expected: PASS.
 
 ```bash
 git add sandbox/filesexec.go sandbox/filesexec_test.go sandbox/sandbox.go
-git commit -m "feat(sandbox): add Files capability and FilesViaExec helper"
+jj commit -m "feat(sandbox): add Files capability and FilesViaExec helper"
 ```
 
 ---
@@ -1248,7 +1248,7 @@ Skip if you don't have an Incus environment configured.
 
 ```bash
 git add sandbox/incus/incus.go
-git commit -m "feat(sandbox/incus): satisfy Files via embedded FilesViaExec"
+jj commit -m "feat(sandbox/incus): satisfy Files via embedded FilesViaExec"
 ```
 
 ---
@@ -1290,7 +1290,7 @@ Expected: clean build, all existing tests still pass.
 
 ```bash
 git add sandbox/truenas/truenas.go
-git commit -m "feat(sandbox/truenas): satisfy Files via embedded FilesViaExec"
+jj commit -m "feat(sandbox/truenas): satisfy Files via embedded FilesViaExec"
 ```
 
 ---
@@ -1491,7 +1491,7 @@ Expected: PASS.
 
 ```bash
 git add internal/mcp/reaper.go internal/mcp/reaper_test.go
-git commit -m "feat(mcp): add reaper with idle-stop and hard-destroy TTLs"
+jj commit -m "feat(mcp): add reaper with idle-stop and hard-destroy TTLs"
 ```
 
 ---
@@ -2167,7 +2167,7 @@ Expected: PASS, build clean.
 
 ```bash
 git add internal/mcp/tools.go internal/mcp/tools_test.go
-git commit -m "feat(mcp): add tool layer with lifecycle, exec, and file CRUD+edit"
+jj commit -m "feat(mcp): add tool layer with lifecycle, exec, and file CRUD+edit"
 ```
 
 ---
@@ -2322,7 +2322,7 @@ Expected: PASS.
 
 ```bash
 git add internal/mcp/server.go internal/mcp/server_test.go go.mod go.sum
-git commit -m "feat(mcp): wire streamable-HTTP server with all tool registrations"
+jj commit -m "feat(mcp): wire streamable-HTTP server with all tool registrations"
 ```
 
 ---
@@ -2504,7 +2504,7 @@ Expected: PASS.
 
 ```bash
 git add cmd/mcp.go
-git commit -m "feat(cmd): add 'pixels mcp' subcommand"
+jj commit -m "feat(cmd): add 'pixels mcp' subcommand"
 ```
 
 ---
@@ -2595,7 +2595,7 @@ Real client flow: point Claude Code at the URL and from a chat:
 
 ```bash
 git add README.md
-git commit -m "docs: document 'pixels mcp' server usage and tool surface"
+jj commit -m "docs: document 'pixels mcp' server usage and tool surface"
 ```
 
 ---
@@ -2625,7 +2625,7 @@ Expected: no output (or only intentional TODOs you want to keep).
 If the cleanup pass produced edits:
 
 ```bash
-git commit -am "chore(mcp): final cleanup"
+jj commit -m "chore(mcp): final cleanup"
 ```
 
 Otherwise nothing to do.
