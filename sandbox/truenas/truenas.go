@@ -27,6 +27,9 @@ type TrueNAS struct {
 	cfg    *tnConfig
 	ssh    sshRunner
 	warn   io.Writer
+
+	// Embedded helper provides WriteFile/ReadFile/ListFiles/DeleteFile via Run.
+	sandbox.FilesViaExec
 }
 
 func (t *TrueNAS) warnf(format string, a ...any) {
@@ -47,12 +50,14 @@ func New(cfg map[string]string) (*TrueNAS, error) {
 		return nil, err
 	}
 
-	return &TrueNAS{
+	t := &TrueNAS{
 		client: client,
 		cfg:    c,
 		ssh:    realSSH{},
 		warn:   os.Stderr,
-	}, nil
+	}
+	t.FilesViaExec = sandbox.FilesViaExec{Exec: t}
+	return t, nil
 }
 
 // NewForTest creates a TrueNAS backend with injected dependencies for testing.
