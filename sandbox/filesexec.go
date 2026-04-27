@@ -93,9 +93,9 @@ func (f FilesViaExec) ReadFile(ctx context.Context, name, p string, maxBytes int
 // ListFiles uses `find -printf '%p\t%s\t%m\t%y\n'` to enumerate entries.
 // Non-recursive uses -maxdepth 1.
 func (f FilesViaExec) ListFiles(ctx context.Context, name, p string, recursive bool) ([]FileEntry, error) {
-	args := []string{"find", "--", p, "-mindepth", "1", "-printf", "%p\t%s\t%m\t%y\n"}
+	args := []string{"find", p, "-mindepth", "1", "-printf", "%p\t%s\t%m\t%y\n"}
 	if !recursive {
-		args = []string{"find", "--", p, "-mindepth", "1", "-maxdepth", "1", "-printf", "%p\t%s\t%m\t%y\n"}
+		args = []string{"find", p, "-mindepth", "1", "-maxdepth", "1", "-printf", "%p\t%s\t%m\t%y\n"}
 	}
 	out, err := f.Exec.Output(ctx, name, args)
 	if err != nil {

@@ -140,6 +140,24 @@ func TestFilesViaExecReadFileTruncated(t *testing.T) {
 	}
 }
 
+func TestFilesViaExecListFilesDoesNotPassDashDashToFind(t *testing.T) {
+	var captured []string
+	fe := &fakeExec{
+		outputResp: func(cmd []string) ([]byte, error) {
+			captured = cmd
+			return []byte(""), nil
+		},
+	}
+	files := FilesViaExec{Exec: fe}
+	_, _ = files.ListFiles(context.Background(), "sb", "/tmp", false)
+
+	for _, arg := range captured {
+		if arg == "--" {
+			t.Errorf("find argv should not contain --; got %v", captured)
+		}
+	}
+}
+
 func TestFilesViaExecListFiles(t *testing.T) {
 	fe := &fakeExec{
 		outputResp: func(cmd []string) ([]byte, error) {
