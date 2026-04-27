@@ -241,7 +241,9 @@ func TestListBasesReturnsConfiguredBases(t *testing.T) {
 		},
 	}
 	tt.Builder = &Builder{}
-	fb.snapshots["px-base-python:"+InitialCheckpointLabel] = time.Now() // python is built; node is not
+	// python base container exists with snapshot; node does not
+	fb.created = append(fb.created, sandbox.CreateOpts{Name: "px-base-python"})
+	fb.snapshots["px-base-python:"+InitialCheckpointLabel] = time.Now()
 
 	out, err := tt.ListBases(context.Background(), EmptyIn{})
 	if err != nil {
