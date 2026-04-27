@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -86,6 +87,23 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	buildLockDir := filepath.Dir(stateFile)
+	builder := &mcppkg.Builder{
+		FailureTTL: 10 * time.Minute,
+	}
+	builder.DoBuild = func(buildCtx context.Context, name string) error {
+		bl, err := mcppkg.AcquireBuildLock(buildLockDir, name)
+		if err != nil {
+			return err
+		}
+		defer bl.Release()
+		baseCfg, ok := cfg.MCP.Bases[name]
+		if !ok {
+			return fmt.Errorf("base %q not declared", name)
+		}
+		return mcppkg.BuildBase(buildCtx, sb, baseCfg, name, os.Stderr)
+	}
+
 	mux, _ := mcppkg.NewServer(mcppkg.ServerOpts{
 		State:          state,
 		Backend:        sb,
@@ -95,6 +113,9 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		Log:            log,
 		Locks:          locks,
 		DaemonCtx:      ctx,
+		Cfg:            cfg,
+		Builder:        builder,
+		BuildLockDir:   buildLockDir,
 	}, cfg.MCP.EndpointPath)
 
 	reaper := &mcppkg.Reaper{

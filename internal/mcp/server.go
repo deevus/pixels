@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/deevus/pixels/internal/config"
 	"github.com/deevus/pixels/sandbox"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -20,6 +21,9 @@ type ServerOpts struct {
 	Log            *slog.Logger
 	Locks          *SandboxLocks // shared with Reaper; constructed by caller
 	DaemonCtx      context.Context // outlives any single request; provisioning goroutine inherits this
+	Cfg            *config.Config
+	Builder        *Builder
+	BuildLockDir   string
 }
 
 // NewServer wires the MCP tool surface and returns an HTTP handler ready to mount.
@@ -45,6 +49,9 @@ func NewServer(opts ServerOpts, endpointPath string) (http.Handler, *Tools) {
 	}
 
 	tools.DaemonCtx = opts.DaemonCtx
+	tools.Cfg = opts.Cfg
+	tools.Builder = opts.Builder
+	tools.BuildLockDir = opts.BuildLockDir
 
 	srv := sdk.NewServer(&sdk.Implementation{Name: "pixels-mcp", Version: "0.1.0"}, nil)
 

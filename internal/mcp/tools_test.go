@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/deevus/pixels/internal/config"
 	"github.com/deevus/pixels/sandbox"
 )
 
@@ -210,6 +212,53 @@ func TestListSandboxesIncludesErrorAndIP(t *testing.T) {
 	}
 	if run == nil || run.IP != "10.0.0.5" {
 		t.Errorf("expected ip=10.0.0.5 on run; got %+v", run)
+	}
+}
+
+func writeTempScript(t *testing.T, content string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "setup.sh")
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestCreateSandboxWithBaseClonesFromSnapshot(t *testing.T) {
+	tt, fb := newTestTools(t)
+	tt.Cfg = &config.Config{
+		MCP: config.MCP{
+			Bases: map[string]config.Base{
+				"python": {
+					ParentImage: "images:ubuntu/24.04",
+					SetupScript: writeTempScript(t, "#!/bin/bash\necho hi\n"),
+					Description: "Python 3",
+				},
+			},
+		},
+	}
+	tt.BuildLockDir = t.TempDir()
+	tt.Builder = &Builder{}
+	tt.Builder.DoBuild = func(ctx context.Context, name string) error {
+		return BuildBase(ctx, tt.Backend, tt.Cfg.MCP.Bases[name], name, io.Discard)
+	}
+
+	// Pretend the snapshot already exists for this test.
+	fb.snapshots["px-base-python"] = "ready"
+
+	out, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{Base: "python"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wait for provisioning to flip to running.
+	mustEventually(t, func() bool {
+		got, _ := tt.State.Get(out.Name)
+		return got.Status == "running"
+	})
+	// Verify CloneFrom was used, not Create.
+	if len(fb.cloned) != 1 || fb.cloned[0].source != "px-base-python" {
+		t.Errorf("expected CloneFrom px-base-python; got %+v", fb.cloned)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/deevus/pixels/internal/config"
 	"github.com/deevus/pixels/sandbox"
 )
 
@@ -26,6 +27,9 @@ type Tools struct {
 	Log            *slog.Logger  // not nil; defaults to NopLogger if not set
 	Locks          *SandboxLocks // shared with Reaper; never nil after NewServer
 	DaemonCtx      context.Context // outlives any single request; provisioning goroutine inherits this
+	Cfg            *config.Config
+	Builder        *Builder
+	BuildLockDir   string
 	provisionWG    sync.WaitGroup // test affordance: tracks in-flight provisioning goroutines
 }
 
@@ -53,6 +57,7 @@ func (t *Tools) persist() error {
 type CreateSandboxIn struct {
 	Label string `json:"label,omitempty"`
 	Image string `json:"image,omitempty"`
+	Base  string `json:"base,omitempty"`
 }
 type CreateSandboxOut struct {
 	Name   string `json:"name"`
@@ -184,6 +189,7 @@ func (t *Tools) CreateSandbox(ctx context.Context, in CreateSandboxIn) (CreateSa
 		Name:           name,
 		Label:          in.Label,
 		Image:          image,
+		Base:           in.Base,
 		Status:         "provisioning",
 		CreatedAt:      now,
 		LastActivityAt: now,
@@ -219,6 +225,14 @@ func (t *Tools) provision(name string, in CreateSandboxIn) {
 		ctx = context.Background()
 	}
 
+	if in.Base != "" {
+		t.provisionFromBase(ctx, name, in)
+		return
+	}
+	t.provisionFromImage(ctx, name, in)
+}
+
+func (t *Tools) provisionFromImage(ctx context.Context, name string, in CreateSandboxIn) {
 	image := in.Image
 	if image == "" {
 		image = t.DefaultImage
@@ -248,6 +262,64 @@ func (t *Tools) provision(name string, in CreateSandboxIn) {
 		_ = t.persist()
 	}
 	t.log().Info("provisioning complete", "name", name)
+}
+
+func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSandboxIn) {
+	if t.Cfg == nil {
+		t.State.MarkFailed(name, fmt.Errorf("config not loaded; base provisioning unavailable"))
+		_ = t.persist()
+		return
+	}
+	if _, ok := t.Cfg.MCP.Bases[in.Base]; !ok {
+		t.State.MarkFailed(name, fmt.Errorf("base %q not declared in config", in.Base))
+		_ = t.persist()
+		return
+	}
+
+	// Ensure the snapshot exists (build if not). This blocks for the duration
+	// of the build, which may be minutes — that's fine; we're in a goroutine.
+	if !t.snapshotExists(ctx, name, BuildBaseSnapshotName(in.Base)) {
+		if err := t.Builder.Build(ctx, in.Base); err != nil {
+			t.State.MarkFailed(name, fmt.Errorf("build base %s: %w", in.Base, err))
+			_ = t.persist()
+			return
+		}
+	}
+
+	// Clone from the base snapshot.
+	cloneLabel := in.Label
+	if err := t.Backend.CloneFrom(ctx, BuildBaseSnapshotName(in.Base), cloneLabel, name); err != nil {
+		t.State.MarkFailed(name, fmt.Errorf("clone: %w", err))
+		_ = t.persist()
+		return
+	}
+
+	if err := t.Backend.Ready(ctx, name, 2*time.Minute); err != nil {
+		t.State.MarkFailed(name, fmt.Errorf("ready: %w", err))
+		_ = t.persist()
+		return
+	}
+
+	if inst, err := t.Backend.Get(ctx, name); err == nil && len(inst.Addresses) > 0 {
+		t.State.SetIP(name, inst.Addresses[0])
+	}
+	t.State.MarkRunning(name)
+	t.State.BumpActivity(name, time.Now().UTC())
+	if ctx.Err() == nil {
+		_ = t.persist()
+	}
+	t.log().Info("cloned from base", "name", name, "base", in.Base)
+}
+
+// snapshotExists returns true if the named base snapshot already exists on the
+// backend. For v1 this uses a pessimistic strategy: it always returns false,
+// deferring to the Builder which is idempotent (BuildBase will fail at
+// CreateSnapshot if it already exists, and the Builder's failure cache avoids
+// repeated failed attempts).
+//
+// TODO: add Backend.SnapshotExists to the interface for an O(1) check.
+func (t *Tools) snapshotExists(ctx context.Context, sandboxName, snapName string) bool {
+	return false
 }
 
 func (t *Tools) DestroySandbox(ctx context.Context, in SandboxRef) (Ack, error) {
