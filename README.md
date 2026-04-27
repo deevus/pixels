@@ -359,8 +359,9 @@ Claude Code MCP entry:
 
 | Tool | What it does |
 |---|---|
-| `create_sandbox` | Spin up a new ephemeral container |
-| `list_sandboxes` | List tracked sandboxes |
+| `create_sandbox` | Spin up a new ephemeral container (`base` for fast clone, `image` for raw) |
+| `list_sandboxes` | List tracked sandboxes (with status, error, IP) |
+| `list_bases` | List declared base pixels and their status |
 | `start_sandbox` / `stop_sandbox` / `destroy_sandbox` | Lifecycle |
 | `exec` | Run a command inside a sandbox |
 | `write_file` | Create or fully overwrite a file |
@@ -368,6 +369,42 @@ Claude Code MCP entry:
 | `edit_file` | Replace `old_string` with `new_string` (with optional `replace_all`) |
 | `delete_file` | Remove a file |
 | `list_files` | List directory contents (optionally recursive) |
+
+### Base pixels
+
+Bases are pre-built ZFS snapshots that `create_sandbox(base="X")` clones
+from. Cloning is sub-5s; building from scratch takes minutes.
+
+Configure in `~/.config/pixels/config.toml`:
+
+```toml
+[mcp.bases.python]
+parent_image = "images:ubuntu/24.04"
+setup_script = "~/.config/pixels/bases/python.sh"
+description = "Ubuntu 24.04 + python3, pip, pipx"
+```
+
+The `setup_script` is a regular shell script run as root during base
+build. Pre-warm a base with:
+
+```
+pixels mcp build-base python
+```
+
+Or just call `create_sandbox(base="python")` from an agent — the daemon
+will build the base in the background on first use. The `list_bases`
+MCP tool shows status (`ready` / `missing` / `building` / `failed`).
+
+### Provisioning is async
+
+`create_sandbox` returns immediately with `status: "provisioning"`.
+The agent should poll `list_sandboxes` until status flips to `running`
+or `failed`. A failed sandbox includes an `error` field describing
+what went wrong.
+
+For simple use without a base, provisioning takes ~30s. With a built
+base, ~5s. With an unbuilt base, several minutes (the build runs
+behind the scenes).
 
 ### Lifetimes
 
