@@ -2,18 +2,19 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add a `pixels mcp` subcommand that runs a streamable-HTTP MCP server, exposing pixels container lifecycle (create/start/stop/destroy) plus exec and SFTP file I/O as MCP tools, so AI agents can drive disposable Linux sandboxes.
+**Goal:** Add a `pixels mcp` subcommand that runs a streamable-HTTP MCP server, exposing pixels container lifecycle plus exec, file CRUD, and a Claude-style `edit_file` as MCP tools, so AI agents can drive disposable Linux sandboxes.
 
-**Architecture:** Long-running daemon, single instance per host (pidfile-gated), bound to `127.0.0.1` by default. Tool handlers call into the existing `sandbox.Sandbox` interface for lifecycle and into a new programmatic SSH/SFTP client for file ops. State persisted to a JSON file with atomic writes; an in-memory `sync.RWMutex` guards reads/writes; a reaper goroutine enforces idle-stop and hard-destroy TTLs. See `docs/plans/2026-04-27-mcp-sandbox-server-design.md` for the design write-up.
+**Architecture:** Long-running daemon, single instance per host (pidfile-gated), bound to `127.0.0.1` by default. Tool handlers call into the existing `sandbox.Sandbox` interface. File I/O is added as a new `Files` capability on that interface; both backends embed a shared `FilesViaExec` helper that composes `cat` / `head` / `find` / `rm` over the existing Exec transport. State persisted to a JSON file with atomic writes; per-sandbox mutexes serialize concurrent calls. See `docs/plans/2026-04-27-mcp-sandbox-server-design.md` for the design write-up.
 
 **Tech Stack:**
 - Go 1.25
-- `github.com/modelcontextprotocol/go-sdk` — official MCP Go SDK (streamable-HTTP server)
-- `golang.org/x/crypto/ssh` — programmatic SSH client (already an indirect dep)
-- `github.com/pkg/sftp` — SFTP over SSH (already an indirect dep)
+- `github.com/modelcontextprotocol/go-sdk` — official MCP Go SDK (streamable-HTTP)
 - `github.com/BurntSushi/toml` + `github.com/caarlos0/env/v11` — existing config pattern
-- `github.com/spf13/cobra` — existing CLI framework
-- Existing packages: `internal/config`, `internal/ssh`, `sandbox`, `sandbox/truenas`, `sandbox/incus`
+- `github.com/spf13/cobra` — existing CLI
+- `al.essio.dev/pkg/shellescape` — already used; safe quoting in `FilesViaExec`
+- Existing packages: `internal/config`, `sandbox`, `sandbox/truenas`, `sandbox/incus`
+
+No new SSH/SFTP dependencies. File ops ride the same Exec transport `pixels exec` already uses.
 
 ---
 
@@ -22,15 +23,14 @@
 Before starting:
 
 1. **Read the design doc** at `docs/plans/2026-04-27-mcp-sandbox-server-design.md`. Every architectural decision in this plan is justified there.
-2. **Read `sandbox/sandbox.go`** to understand the `Sandbox` interface and `Instance`/`CreateOpts`/`ExecOpts` types. The MCP tool handlers call into this interface, not into backend-specific code.
+2. **Read `sandbox/sandbox.go`** to understand the `Sandbox` composite interface and the `Backend` / `Exec` / `NetworkPolicy` sub-interfaces it composes. The MCP tool handlers call into `Sandbox`, not into backend-specific code.
 3. **Read `internal/config/config.go`** to understand the config-loading pattern (TOML defaults → file → env-var overrides via `caarlos0/env`).
 4. **Read `cmd/root.go`** to understand how cobra commands access config and open a sandbox via `openSandbox()`.
-5. The existing `internal/ssh` package shells out to the `ssh` CLI. We are intentionally **not** modifying it. The new SSH/SFTP client lives in a separate file (`internal/sshclient/sshclient.go`) so MCP file ops don't disturb existing CLI behavior.
-6. **Verify the MCP Go SDK API** before Task 9. The SDK is young; check `pkg.go.dev/github.com/modelcontextprotocol/go-sdk` for the current `mcp.NewServer` / `AddTool` / `StreamableHTTPHandler` shape. If the API has shifted, adapt — the data flow stays the same.
+5. **Verify the MCP Go SDK API** before Task 11 with `go doc github.com/modelcontextprotocol/go-sdk/mcp`. The SDK is young; check the current `mcp.NewServer` / `AddTool` / `StreamableHTTPHandler` shape and adapt the wrappers if signatures have shifted. The data flow is the same regardless.
 
-**Commit cadence:** one commit per task. Each task is small enough that the commit message can be a single line.
+**Commit cadence:** one commit per task. Each task is small enough that a single-line commit message is enough.
 
-**Test conventions:** table-driven where possible (the codebase uses this pattern — see `cmd/resolve_test.go`, `internal/ssh/ssh_test.go`). Mock-based tests for backend-dependent code.
+**Test conventions:** table-driven where possible (matches `cmd/resolve_test.go`, `internal/ssh/ssh_test.go`). Mock-based tests for backend-dependent code.
 
 ---
 
@@ -118,7 +118,7 @@ idle_stop_after = "30m"
 }
 ```
 
-**Step 2: Run the tests to verify failure**
+**Step 2: Run tests to verify failure**
 
 ```
 go test ./internal/config -run TestMCP -v
@@ -134,18 +134,18 @@ In `internal/config/config.go`, add the `MCP` field to `Config` and a new struct
 // add to Config struct
 MCP        MCP            `toml:"mcp"`
 
-// new struct (place near other backend-config structs)
+// new struct
 type MCP struct {
-	Prefix           string `toml:"prefix"            env:"PIXELS_MCP_PREFIX"`
-	DefaultImage     string `toml:"default_image"     env:"PIXELS_MCP_DEFAULT_IMAGE"`
-	IdleStopAfter    string `toml:"idle_stop_after"   env:"PIXELS_MCP_IDLE_STOP_AFTER"`
+	Prefix           string `toml:"prefix"             env:"PIXELS_MCP_PREFIX"`
+	DefaultImage     string `toml:"default_image"      env:"PIXELS_MCP_DEFAULT_IMAGE"`
+	IdleStopAfter    string `toml:"idle_stop_after"    env:"PIXELS_MCP_IDLE_STOP_AFTER"`
 	HardDestroyAfter string `toml:"hard_destroy_after" env:"PIXELS_MCP_HARD_DESTROY_AFTER"`
-	ReapInterval     string `toml:"reap_interval"     env:"PIXELS_MCP_REAP_INTERVAL"`
-	StateFile        string `toml:"state_file"        env:"PIXELS_MCP_STATE_FILE"`
-	PIDFile          string `toml:"pid_file"          env:"PIXELS_MCP_PID_FILE"`
-	ExecTimeoutMax   string `toml:"exec_timeout_max"  env:"PIXELS_MCP_EXEC_TIMEOUT_MAX"`
-	ListenAddr       string `toml:"listen_addr"       env:"PIXELS_MCP_LISTEN_ADDR"`
-	EndpointPath     string `toml:"endpoint_path"     env:"PIXELS_MCP_ENDPOINT_PATH"`
+	ReapInterval     string `toml:"reap_interval"      env:"PIXELS_MCP_REAP_INTERVAL"`
+	StateFile        string `toml:"state_file"         env:"PIXELS_MCP_STATE_FILE"`
+	PIDFile          string `toml:"pid_file"           env:"PIXELS_MCP_PID_FILE"`
+	ExecTimeoutMax   string `toml:"exec_timeout_max"   env:"PIXELS_MCP_EXEC_TIMEOUT_MAX"`
+	ListenAddr       string `toml:"listen_addr"        env:"PIXELS_MCP_LISTEN_ADDR"`
+	EndpointPath     string `toml:"endpoint_path"      env:"PIXELS_MCP_ENDPOINT_PATH"`
 }
 ```
 
@@ -154,14 +154,14 @@ In `Load()`, set defaults inside the initial `cfg := &Config{ ... }` block:
 ```go
 MCP: MCP{
 	Prefix:           "px-mcp-",
-	DefaultImage:     "",            // resolved later from cfg.Defaults.Image if empty
 	IdleStopAfter:    "1h",
 	HardDestroyAfter: "24h",
 	ReapInterval:     "1m",
 	ExecTimeoutMax:   "10m",
 	ListenAddr:       "127.0.0.1:8765",
 	EndpointPath:     "/mcp",
-	// StateFile, PIDFile resolved from XDG cache dir at use time, not here
+	// DefaultImage falls back to cfg.Defaults.Image at use time.
+	// StateFile, PIDFile resolved from XDG cache dir at use time.
 },
 ```
 
@@ -189,7 +189,7 @@ git commit -m "feat(config): add [mcp] config section with defaults"
 - Modify: `internal/config/config.go`
 - Test: `internal/config/config_test.go`
 
-**Why:** State file and pidfile default to `~/.cache/pixels/`. Centralize the path resolution so the MCP package doesn't reach into config internals.
+**Why:** State file and pidfile default to `~/.cache/pixels/`. Centralize the resolution so the MCP package doesn't reach into config internals.
 
 **Step 1: Write the failing test**
 
@@ -228,10 +228,10 @@ func TestMCPPIDFilePath(t *testing.T) {
 }
 ```
 
-**Step 2: Run to verify failure**
+**Step 2: Verify failure**
 
 ```
-go test ./internal/config -run TestMCP.*Path -v
+go test ./internal/config -run "TestMCP.*Path|TestMCPPID" -v
 ```
 
 Expected: FAIL — methods undefined.
@@ -374,7 +374,7 @@ func TestStateBumpActivity(t *testing.T) {
 }
 ```
 
-**Step 2: Run to verify failure**
+**Step 2: Verify failure**
 
 ```
 go test ./internal/mcp -v
@@ -382,9 +382,7 @@ go test ./internal/mcp -v
 
 Expected: FAIL — package or types undefined.
 
-**Step 3: Implement the state types**
-
-Create `internal/mcp/state.go`:
+**Step 3: Implement `internal/mcp/state.go`**
 
 ```go
 // Package mcp implements an MCP server that exposes pixels sandbox
@@ -434,8 +432,6 @@ func LoadState(path string) (*State, error) {
 		return nil, fmt.Errorf("reading state: %w", err)
 	}
 	if err := json.Unmarshal(b, &s.data); err != nil {
-		// Corrupt state — log and start clean. Orphan sandboxes will need
-		// manual cleanup via `pixels list` / `pixels destroy`.
 		fmt.Fprintf(os.Stderr, "pixels mcp: state file corrupt, starting empty: %v\n", err)
 		s.data = stateData{}
 	}
@@ -537,7 +533,7 @@ func (s *State) Save() error {
 }
 ```
 
-**Step 4: Run tests**
+**Step 4: Run**
 
 ```
 go test ./internal/mcp -v
@@ -554,14 +550,12 @@ git commit -m "feat(mcp): add State type with in-memory + JSON persistence"
 
 ---
 
-## Task 4: Add atomic-write and corruption tests for State.Save
+## Task 4: Add atomic-write and corruption tests for `State.Save`
 
 **Files:**
 - Modify: `internal/mcp/state_test.go`
 
-**Step 1: Write the failing tests**
-
-Append:
+**Step 1: Append tests**
 
 ```go
 func TestStateSaveAndReload(t *testing.T) {
@@ -620,16 +614,15 @@ func TestStateLoadCorrupt(t *testing.T) {
 }
 ```
 
-**Step 2: Run**
+(Add `"os"` import.)
+
+**Step 2: Run + commit**
 
 ```
-go test ./internal/mcp -run TestStateSave -v
-go test ./internal/mcp -run TestStateLoadCorrupt -v
+go test ./internal/mcp -v
 ```
 
-Expected: PASS (these exercise behavior already implemented in Task 3).
-
-**Step 3: Commit**
+Expected: PASS.
 
 ```bash
 git add internal/mcp/state_test.go
@@ -645,8 +638,6 @@ git commit -m "test(mcp): cover atomic save and corrupt-state recovery"
 - Create: `internal/mcp/pidfile_test.go`
 
 **Step 1: Write the failing test**
-
-Create `internal/mcp/pidfile_test.go`:
 
 ```go
 package mcp
@@ -677,7 +668,6 @@ func TestAcquirePIDFileSuccess(t *testing.T) {
 
 func TestAcquirePIDFileLiveCollision(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.pid")
-	// Write our own PID (definitely alive) to simulate another live daemon.
 	if err := os.WriteFile(path, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -689,8 +679,6 @@ func TestAcquirePIDFileLiveCollision(t *testing.T) {
 
 func TestAcquirePIDFileStalePID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.pid")
-	// PID 1 is init/launchd — alive — so use a PID guaranteed not to exist.
-	// Picking a high PID that almost certainly is unused.
 	if err := os.WriteFile(path, []byte("999999\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -716,18 +704,15 @@ func TestPIDFileReleaseRemovesFile(t *testing.T) {
 }
 ```
 
-**Step 2: Run**
+**Step 2: Verify failure**
 
 ```
-go test ./internal/mcp -run TestPIDFile -v
-go test ./internal/mcp -run TestAcquirePIDFile -v
+go test ./internal/mcp -run "TestAcquirePIDFile|TestPIDFile" -v
 ```
 
-Expected: FAIL — `AcquirePIDFile` undefined.
+Expected: FAIL — undefined.
 
 **Step 3: Implement**
-
-Create `internal/mcp/pidfile.go`:
 
 ```go
 package mcp
@@ -758,7 +743,6 @@ func AcquirePIDFile(path string) (*PIDFile, error) {
 		if pid, err := strconv.Atoi(pidStr); err == nil && pidAlive(pid) {
 			return nil, fmt.Errorf("another pixels mcp is running (pid=%d, pidfile=%s)", pid, path)
 		}
-		// stale — fall through and overwrite
 	}
 
 	content := fmt.Sprintf("%d\n", os.Getpid())
@@ -787,21 +771,17 @@ func pidAlive(pid int) bool {
 	if err != nil {
 		return false
 	}
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil
+	return proc.Signal(syscall.Signal(0)) == nil
 }
 ```
 
-**Step 4: Run**
+**Step 4: Run + commit**
 
 ```
-go test ./internal/mcp -run TestPIDFile -v
-go test ./internal/mcp -run TestAcquirePIDFile -v
+go test ./internal/mcp -v
 ```
 
 Expected: PASS.
-
-**Step 5: Commit**
 
 ```bash
 git add internal/mcp/
@@ -810,649 +790,518 @@ git commit -m "feat(mcp): add pidfile with stale-PID detection"
 
 ---
 
-## Task 6: Add programmatic SSH/SFTP client
+## Task 6: Add `Files` capability to the `sandbox` package
 
 **Files:**
-- Create: `internal/sshclient/sshclient.go`
-- Create: `internal/sshclient/sshclient_test.go`
+- Modify: `sandbox/sandbox.go`
+- Test: none yet (the interface itself has no behavior; behavior arrives in Task 7).
 
-**Why a separate package:** The existing `internal/ssh` shells out to the `ssh` CLI. SFTP requires a programmatic SSH client. Keeping these in separate packages avoids changing CLI behavior.
+**Why:** The MCP server needs file CRUD on sandbox containers. Rather than have the MCP layer compose shell commands itself, give backends a clean interface to implement (and a default implementation in Task 7).
 
-**Step 1: Write the failing test**
+**Step 1: Add the `Files` interface and `FileEntry` type**
 
-The test uses an in-memory SSH server from `golang.org/x/crypto/ssh` so we don't need a real machine.
-
-Create `internal/sshclient/sshclient_test.go`:
+In `sandbox/sandbox.go`:
 
 ```go
-package sshclient
-
-import (
-	"context"
-	"net"
-	"testing"
-	"time"
-)
-
-// minimal smoke test that the constructor wires options correctly.
-// Full SFTP behavior is exercised in mcp/files_test.go using a fixture server.
-func TestNewClientDialFailure(t *testing.T) {
-	// Use a port nothing listens on. Connection refused = construction reaches dial.
-	_, err := NewClient(context.Background(), Config{
-		Host:    "127.0.0.1:1",
-		User:    "test",
-		Timeout: 200 * time.Millisecond,
-	})
-	if err == nil {
-		t.Fatal("expected dial error")
-	}
+// Add near the existing FileEntry-shaped types (after NetworkPolicy).
+// FileEntry describes one entry in a ListFiles result.
+type FileEntry struct {
+	Path  string      `json:"path"`
+	Size  int64       `json:"size"`
+	Mode  os.FileMode `json:"mode"`
+	IsDir bool        `json:"is_dir"`
 }
 
-func TestConfigAddrDefault(t *testing.T) {
-	cfg := Config{Host: "1.2.3.4"}
-	got := cfg.addr()
-	if _, _, err := net.SplitHostPort(got); err != nil {
-		t.Errorf("addr should be host:port, got %q (%v)", got, err)
-	}
+// Files provides byte-level file I/O into a sandbox instance.
+type Files interface {
+	WriteFile(ctx context.Context, name, path string, content []byte, mode os.FileMode) error
+	ReadFile(ctx context.Context, name, path string, maxBytes int64) (content []byte, truncated bool, err error)
+	ListFiles(ctx context.Context, name, path string, recursive bool) ([]FileEntry, error)
+	DeleteFile(ctx context.Context, name, path string) error
+}
+
+// Sandbox composes all sandbox capabilities into a single interface.
+type Sandbox interface {
+	Backend
+	Exec
+	Files          // NEW
+	NetworkPolicy
 }
 ```
 
-**Step 2: Run to verify failure**
+Add `"os"` to imports (needed for `os.FileMode`).
+
+**Step 2: Run build**
 
 ```
-go test ./internal/sshclient -v
-```
-
-Expected: FAIL — package undefined.
-
-**Step 3: Implement**
-
-Create `internal/sshclient/sshclient.go`:
-
-```go
-// Package sshclient provides a programmatic SSH and SFTP client used by the
-// MCP server for file I/O into sandboxes. It is intentionally separate from
-// internal/ssh, which shells out to the ssh CLI for interactive sessions.
-package sshclient
-
-import (
-	"context"
-	"fmt"
-	"net"
-	"os"
-	"strings"
-	"time"
-
-	"github.com/pkg/sftp"
-	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
-)
-
-// Config holds connection parameters.
-type Config struct {
-	Host           string        // host or host:port
-	User           string
-	KeyPath        string        // path to private key
-	KnownHostsPath string        // path to known_hosts; empty = InsecureIgnoreHostKey
-	Timeout        time.Duration // dial timeout; default 10s if zero
-}
-
-func (c Config) addr() string {
-	if strings.Contains(c.Host, ":") {
-		return c.Host
-	}
-	return c.Host + ":22"
-}
-
-// Client wraps an SSH client and exposes Exec and SFTP.
-type Client struct {
-	ssh *ssh.Client
-}
-
-// NewClient dials and authenticates using the configured private key.
-func NewClient(ctx context.Context, cfg Config) (*Client, error) {
-	timeout := cfg.Timeout
-	if timeout == 0 {
-		timeout = 10 * time.Second
-	}
-
-	keyBytes, err := os.ReadFile(cfg.KeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("read key %q: %w", cfg.KeyPath, err)
-	}
-	signer, err := ssh.ParsePrivateKey(keyBytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse key: %w", err)
-	}
-
-	hostKeyCallback := ssh.InsecureIgnoreHostKey()
-	if cfg.KnownHostsPath != "" {
-		cb, err := knownhosts.New(cfg.KnownHostsPath)
-		if err != nil {
-			return nil, fmt.Errorf("load known_hosts: %w", err)
-		}
-		hostKeyCallback = cb
-	}
-
-	sshCfg := &ssh.ClientConfig{
-		User:            cfg.User,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: hostKeyCallback,
-		Timeout:         timeout,
-	}
-
-	dialer := &net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", cfg.addr())
-	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", cfg.addr(), err)
-	}
-
-	c, chans, reqs, err := ssh.NewClientConn(conn, cfg.addr(), sshCfg)
-	if err != nil {
-		return nil, fmt.Errorf("ssh handshake: %w", err)
-	}
-	return &Client{ssh: ssh.NewClient(c, chans, reqs)}, nil
-}
-
-// Close releases the underlying SSH connection.
-func (c *Client) Close() error { return c.ssh.Close() }
-
-// ExecResult is the captured output of a single command run.
-type ExecResult struct {
-	ExitCode int
-	Stdout   []byte
-	Stderr   []byte
-}
-
-// Exec runs a command on the remote host and returns its captured output.
-func (c *Client) Exec(ctx context.Context, command []string, env map[string]string, cwd string) (*ExecResult, error) {
-	sess, err := c.ssh.NewSession()
-	if err != nil {
-		return nil, fmt.Errorf("new session: %w", err)
-	}
-	defer sess.Close()
-
-	for k, v := range env {
-		// Best-effort. Many sshd configs reject SetEnv for unlisted vars.
-		_ = sess.Setenv(k, v)
-	}
-
-	cmd := buildShellCommand(command, cwd)
-	go func() { <-ctx.Done(); _ = sess.Signal(ssh.SIGKILL) }()
-
-	stdoutC := make(chan []byte, 1)
-	stderrC := make(chan []byte, 1)
-
-	stdout, _ := sess.StdoutPipe()
-	stderr, _ := sess.StderrPipe()
-	if err := sess.Start(cmd); err != nil {
-		return nil, fmt.Errorf("start: %w", err)
-	}
-
-	go func() {
-		b, _ := readAll(stdout)
-		stdoutC <- b
-	}()
-	go func() {
-		b, _ := readAll(stderr)
-		stderrC <- b
-	}()
-
-	exitErr := sess.Wait()
-	res := &ExecResult{
-		Stdout: <-stdoutC,
-		Stderr: <-stderrC,
-	}
-	if exitErr == nil {
-		res.ExitCode = 0
-	} else if ee, ok := exitErr.(*ssh.ExitError); ok {
-		res.ExitCode = ee.ExitStatus()
-	} else {
-		// e.g. signal kill from ctx cancel
-		res.ExitCode = -1
-		return res, exitErr
-	}
-	return res, nil
-}
-
-// SFTP returns a fresh SFTP subsystem session. Caller must Close it.
-func (c *Client) SFTP() (*sftp.Client, error) { return sftp.NewClient(c.ssh) }
-```
-
-Add a tiny helper file `internal/sshclient/util.go`:
-
-```go
-package sshclient
-
-import (
-	"io"
-
-	shellescape "al.essio.dev/pkg/shellescape"
-)
-
-func readAll(r io.Reader) ([]byte, error) {
-	if r == nil {
-		return nil, nil
-	}
-	return io.ReadAll(r)
-}
-
-// buildShellCommand wraps argv in `cd && exec` when cwd is set, properly quoted.
-func buildShellCommand(command []string, cwd string) string {
-	cmd := shellescape.QuoteCommand(command)
-	if cwd == "" {
-		return cmd
-	}
-	return "cd " + shellescape.Quote(cwd) + " && " + cmd
-}
-```
-
-**Step 4: Update `go.mod` and run**
-
-```
-go get golang.org/x/crypto/ssh golang.org/x/crypto/ssh/knownhosts github.com/pkg/sftp
-go mod tidy
-go test ./internal/sshclient -v
 go build ./...
 ```
 
-Expected: PASS, build clean.
+Expected: FAIL — `*incus.Incus` and `*truenas.TrueNAS` don't satisfy `Sandbox` anymore. The compile error confirms the interface change took effect; Tasks 7–9 fix the backends.
 
-**Step 5: Commit**
-
-```bash
-git add internal/sshclient/ go.mod go.sum
-git commit -m "feat(sshclient): add programmatic SSH/SFTP client for MCP file ops"
-```
+> **Engineer note:** the assertion lines `var _ sandbox.Sandbox = (*TrueNAS)(nil)` and `var _ sandbox.Sandbox = (*Incus)(nil)` in the backends will fail to compile. That's expected. **Do not commit yet** — proceed to Task 7.
 
 ---
 
-## Task 7: Implement SFTP file ops in `internal/mcp/files.go`
+## Task 7: Implement the `FilesViaExec` helper
 
 **Files:**
-- Create: `internal/mcp/files.go`
-- Create: `internal/mcp/files_test.go`
+- Create: `sandbox/filesexec.go`
+- Create: `sandbox/filesexec_test.go`
 
-**Step 1: Write the failing test (using a real SFTP roundtrip via ssh test server)**
+**Why:** Backends without a native file API (TrueNAS, possibly others later) get a default implementation by composing `cat` / `head` / `find` / `rm` over `Exec.Run`. Embedding `FilesViaExec` in a backend struct gives it `Files` for free.
 
-Setting up an in-process SSH server for the test is verbose but tractable. Use the helper from `golang.org/x/crypto/ssh` and `pkg/sftp`'s `NewServer`. This test fixture is reusable across the file_test cases.
+**Step 1: Write the failing test**
 
-Create `internal/mcp/files_test.go`:
+Create `sandbox/filesexec_test.go`:
 
 ```go
-package mcp
+package sandbox
 
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
-	"io"
-	"net"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
-	"time"
-
-	"github.com/deevus/pixels/internal/sshclient"
-	"github.com/pkg/sftp"
-	"golang.org/x/crypto/ssh"
 )
 
-// startTestSSHServer launches an in-process SSH+SFTP server listening on a
-// random localhost port. It returns the addr, a path to a generated client
-// private key, and a cleanup func. It serves the temp dir as the SFTP root.
-func startTestSSHServer(t *testing.T, sftpRoot string) (addr, keyPath string, cleanup func()) {
-	t.Helper()
-
-	hostKeyPub, hostKeyPriv, err := ed25519.GenerateKey(rand.Reader)
-	_ = hostKeyPub
-	if err != nil {
-		t.Fatal(err)
-	}
-	hostSigner, err := ssh.NewSignerFromKey(hostKeyPriv)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	clientPub, clientPriv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clientSSHPub, _ := ssh.NewPublicKey(clientPub)
-
-	cfg := &ssh.ServerConfig{
-		PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-			if bytes.Equal(key.Marshal(), clientSSHPub.Marshal()) {
-				return &ssh.Permissions{}, nil
-			}
-			return nil, errors.New("bad key")
-		},
-	}
-	cfg.AddHostKey(hostSigner)
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	go func() {
-		for {
-			nc, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			go serveSSH(nc, cfg, sftpRoot)
-		}
-	}()
-
-	keyDir := t.TempDir()
-	keyPath = filepath.Join(keyDir, "id_ed25519")
-	pemBytes, err := ssh.MarshalPrivateKey(clientPriv, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(keyPath, pemBytes, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	return ln.Addr().String(), keyPath, func() { _ = ln.Close() }
+// fakeExec captures Run/Output calls. ReadFile etc. work by inspecting the
+// command and either writing to the provided Stdout, returning canned bytes,
+// or recording a side-effect.
+type fakeExec struct {
+	calls       []ExecOpts
+	runResponse func(opts ExecOpts) (int, error)
+	outputResp  func(cmd []string) ([]byte, error)
 }
 
-func serveSSH(nc net.Conn, cfg *ssh.ServerConfig, root string) {
-	conn, chans, reqs, err := ssh.NewServerConn(nc, cfg)
-	if err != nil {
-		return
+func (f *fakeExec) Run(ctx context.Context, name string, opts ExecOpts) (int, error) {
+	f.calls = append(f.calls, opts)
+	if f.runResponse != nil {
+		return f.runResponse(opts)
 	}
-	defer conn.Close()
-	go ssh.DiscardRequests(reqs)
+	return 0, nil
+}
+func (f *fakeExec) Output(ctx context.Context, name string, cmd []string) ([]byte, error) {
+	if f.outputResp != nil {
+		return f.outputResp(cmd)
+	}
+	return nil, errors.New("Output not stubbed")
+}
+func (f *fakeExec) Console(ctx context.Context, name string, opts ConsoleOpts) error { return nil }
+func (f *fakeExec) Ready(ctx context.Context, name string, _ any) error               { return nil }
 
-	for newCh := range chans {
-		if newCh.ChannelType() != "session" {
-			newCh.Reject(ssh.UnknownChannelType, "")
-			continue
-		}
-		ch, in, err := newCh.Accept()
-		if err != nil {
-			return
-		}
-		go func(in <-chan *ssh.Request) {
-			for req := range in {
-				switch req.Type {
-				case "subsystem":
-					if string(req.Payload[4:]) == "sftp" {
-						req.Reply(true, nil)
-						srv, _ := sftp.NewServer(ch, sftp.WithServerWorkingDirectory(root))
-						_ = srv.Serve()
-						_ = ch.Close()
-						return
-					}
-					req.Reply(false, nil)
-				case "exec":
-					req.Reply(true, nil)
-					_, _ = io.Copy(io.Discard, ch)
-					ch.SendRequest("exit-status", false, []byte{0, 0, 0, 0})
-					ch.Close()
-					return
-				default:
-					req.Reply(false, nil)
-				}
-			}
-		}(in)
-	}
+// helper: most recent call's command joined with spaces (for asserts)
+func lastCmd(f *fakeExec) string {
+	return strings.Join(f.calls[len(f.calls)-1].Cmd, " ")
 }
 
-// connect helper
-func dial(t *testing.T, addr, keyPath string) *sshclient.Client {
-	t.Helper()
-	c, err := sshclient.NewClient(context.Background(), sshclient.Config{
-		Host:    addr,
-		User:    "anyuser",
-		KeyPath: keyPath,
-		Timeout: 5 * time.Second,
-	})
-	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-	t.Cleanup(func() { _ = c.Close() })
-	return c
-}
+func TestFilesViaExecWriteFile(t *testing.T) {
+	fe := &fakeExec{}
+	files := FilesViaExec{Exec: fe}
 
-func TestWriteFileAndReadFile(t *testing.T) {
-	root := t.TempDir()
-	addr, keyPath, cleanup := startTestSSHServer(t, root)
-	defer cleanup()
-
-	c := dial(t, addr, keyPath)
-
-	if err := WriteFile(c, "hello.txt", []byte("hi there"), 0o644); err != nil {
+	if err := files.WriteFile(context.Background(), "sb", "/tmp/foo.txt", []byte("hello"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	got, truncated, err := ReadFile(c, "hello.txt", 0)
+	// First call: mkdir -p /tmp ; second: cat > /tmp/foo.txt ; third: chmod 644 /tmp/foo.txt
+	if got := len(fe.calls); got < 2 {
+		t.Fatalf("calls = %d, want >= 2: %+v", got, fe.calls)
+	}
+	// Find the cat write call and verify Stdin matches content.
+	var found bool
+	for _, c := range fe.calls {
+		if len(c.Cmd) >= 2 && c.Cmd[0] == "sh" && strings.Contains(strings.Join(c.Cmd, " "), "cat") {
+			if c.Stdin == nil {
+				t.Fatal("write call has nil Stdin")
+			}
+			b, _ := readAll(c.Stdin)
+			if string(b) != "hello" {
+				t.Errorf("written content = %q, want %q", b, "hello")
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no cat-write call found in: %+v", fe.calls)
+	}
+}
+
+func TestFilesViaExecReadFileFull(t *testing.T) {
+	fe := &fakeExec{
+		runResponse: func(opts ExecOpts) (int, error) {
+			if opts.Stdout != nil && len(opts.Cmd) > 0 && opts.Cmd[0] == "cat" {
+				_, _ = opts.Stdout.Write([]byte("hi"))
+			}
+			return 0, nil
+		},
+	}
+	files := FilesViaExec{Exec: fe}
+
+	got, truncated, err := files.ReadFile(context.Background(), "sb", "/tmp/f", 0)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	if truncated {
-		t.Error("truncated should be false")
+		t.Error("truncated should be false when maxBytes==0")
 	}
-	if string(got) != "hi there" {
-		t.Errorf("got %q, want %q", got, "hi there")
+	if string(got) != "hi" {
+		t.Errorf("got %q, want %q", got, "hi")
 	}
 }
 
-func TestReadFileMaxBytesTruncates(t *testing.T) {
-	root := t.TempDir()
-	addr, keyPath, cleanup := startTestSSHServer(t, root)
-	defer cleanup()
-
-	c := dial(t, addr, keyPath)
-	if err := WriteFile(c, "big.txt", []byte("0123456789"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
+func TestFilesViaExecReadFileTruncated(t *testing.T) {
+	fe := &fakeExec{
+		runResponse: func(opts ExecOpts) (int, error) {
+			if opts.Stdout != nil && len(opts.Cmd) > 0 && opts.Cmd[0] == "head" {
+				_, _ = opts.Stdout.Write(bytes.Repeat([]byte("x"), 4))
+			}
+			return 0, nil
+		},
+		outputResp: func(cmd []string) ([]byte, error) {
+			// stat -c %s -> file is 10 bytes, > maxBytes(4) => truncated
+			return []byte("10\n"), nil
+		},
 	}
-	got, truncated, err := ReadFile(c, "big.txt", 4)
+	files := FilesViaExec{Exec: fe}
+
+	got, truncated, err := files.ReadFile(context.Background(), "sb", "/tmp/f", 4)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	if !truncated {
-		t.Error("expected truncated=true")
+		t.Error("truncated should be true (file=10, maxBytes=4)")
 	}
-	if string(got) != "0123" {
-		t.Errorf("got %q, want %q", got, "0123")
+	if string(got) != "xxxx" {
+		t.Errorf("got %q, want xxxx", got)
 	}
 }
 
-func TestListFiles(t *testing.T) {
-	root := t.TempDir()
-	addr, keyPath, cleanup := startTestSSHServer(t, root)
-	defer cleanup()
-
-	c := dial(t, addr, keyPath)
-	if err := WriteFile(c, "a.txt", []byte("a"), 0o644); err != nil {
-		t.Fatal(err)
+func TestFilesViaExecListFiles(t *testing.T) {
+	fe := &fakeExec{
+		outputResp: func(cmd []string) ([]byte, error) {
+			// find -printf '%p\t%s\t%m\t%y\n'
+			return []byte("/tmp/a.txt\t3\t644\tf\n/tmp/sub\t4096\t755\td\n"), nil
+		},
 	}
-	if err := WriteFile(c, "b.txt", []byte("bb"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	files := FilesViaExec{Exec: fe}
 
-	entries, err := ListFiles(c, ".", false)
+	entries, err := files.ListFiles(context.Background(), "sb", "/tmp", false)
 	if err != nil {
 		t.Fatalf("ListFiles: %v", err)
 	}
 	if got := len(entries); got != 2 {
 		t.Fatalf("entries = %d, want 2: %+v", got, entries)
 	}
+	if entries[1].IsDir != true {
+		t.Errorf("entries[1].IsDir = false, want true")
+	}
+}
+
+func TestFilesViaExecDeleteFile(t *testing.T) {
+	fe := &fakeExec{}
+	files := FilesViaExec{Exec: fe}
+
+	if err := files.DeleteFile(context.Background(), "sb", "/tmp/f"); err != nil {
+		t.Fatalf("DeleteFile: %v", err)
+	}
+	if got := lastCmd(fe); !strings.HasPrefix(got, "rm ") || !strings.Contains(got, "/tmp/f") {
+		t.Errorf("last cmd = %q, want rm of /tmp/f", got)
+	}
 }
 ```
 
-**Step 2: Run to verify failure**
+(Add `"io"` import to silence the unused-package check. Or define `readAll = io.ReadAll` if needed.)
+
+**Step 2: Verify failure**
 
 ```
-go test ./internal/mcp -run "TestWriteFile|TestReadFile|TestListFiles" -v
+go test ./sandbox -v
 ```
 
-Expected: FAIL — `WriteFile`/`ReadFile`/`ListFiles` undefined.
+Expected: FAIL — `FilesViaExec` undefined.
 
-**Step 3: Implement `internal/mcp/files.go`**
+**Step 3: Implement `sandbox/filesexec.go`**
 
 ```go
-package mcp
+package sandbox
 
 import (
-	"errors"
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
+	"path"
+	"strconv"
+	"strings"
 
-	"github.com/deevus/pixels/internal/sshclient"
+	shellescape "al.essio.dev/pkg/shellescape"
 )
 
-// FileEntry is one row in a list_files result.
-type FileEntry struct {
-	Path  string `json:"path"`
-	Size  int64  `json:"size"`
-	Mode  string `json:"mode"`
-	IsDir bool   `json:"is_dir"`
+// FilesViaExec implements [Files] by composing shell commands over an [Exec].
+// Backends without a native file API can embed this struct to satisfy [Files].
+//
+// All commands assume a POSIX shell with `cat`, `head`, `find`, `rm`,
+// `mkdir`, `chmod`, and `stat` available — which is true on every Linux
+// container image we ship.
+type FilesViaExec struct {
+	Exec Exec
 }
 
-// WriteFile uploads content to path on the remote host with the given mode.
-// Creates parent directories as needed.
-func WriteFile(c *sshclient.Client, path string, content []byte, mode os.FileMode) error {
-	sftp, err := c.SFTP()
-	if err != nil {
-		return fmt.Errorf("sftp: %w", err)
-	}
-	defer sftp.Close()
-
-	if dir := filepath.Dir(path); dir != "." && dir != "/" {
-		if err := sftp.MkdirAll(dir); err != nil {
-			return fmt.Errorf("mkdirall %s: %w", dir, err)
+// WriteFile creates parent dirs, streams content via stdin into `cat > path`,
+// then chmods to mode.
+func (f FilesViaExec) WriteFile(ctx context.Context, name, p string, content []byte, mode os.FileMode) error {
+	if dir := path.Dir(p); dir != "." && dir != "/" {
+		if code, err := f.Exec.Run(ctx, name, ExecOpts{
+			Cmd: []string{"mkdir", "-p", "--", dir},
+		}); err != nil || code != 0 {
+			return fmt.Errorf("mkdir %s: code=%d err=%v", dir, code, err)
 		}
 	}
 
-	f, err := sftp.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC)
+	var stderr bytes.Buffer
+	cmd := fmt.Sprintf("cat > %s", shellescape.Quote(p))
+	code, err := f.Exec.Run(ctx, name, ExecOpts{
+		Cmd:    []string{"sh", "-c", cmd},
+		Stdin:  bytes.NewReader(content),
+		Stderr: &stderr,
+	})
 	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
+		return fmt.Errorf("write %s: %w", p, err)
 	}
-	defer f.Close()
+	if code != 0 {
+		return fmt.Errorf("write %s: exit %d: %s", p, code, stderr.String())
+	}
 
-	if _, err := f.Write(content); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	if err := sftp.Chmod(path, mode); err != nil {
-		return fmt.Errorf("chmod %s: %w", path, err)
+	if code, err := f.Exec.Run(ctx, name, ExecOpts{
+		Cmd: []string{"chmod", fmt.Sprintf("%o", mode), "--", p},
+	}); err != nil || code != 0 {
+		return fmt.Errorf("chmod %s: code=%d err=%v", p, code, err)
 	}
 	return nil
 }
 
-// ReadFile downloads up to maxBytes bytes from path. maxBytes <= 0 means no
-// limit. Returns content, whether it was truncated, and error.
-func ReadFile(c *sshclient.Client, path string, maxBytes int64) ([]byte, bool, error) {
-	sftp, err := c.SFTP()
+// ReadFile streams the file (or first maxBytes) to a buffer. If maxBytes>0
+// and the file is larger, returns truncated=true.
+func (f FilesViaExec) ReadFile(ctx context.Context, name, p string, maxBytes int64) ([]byte, bool, error) {
+	var buf bytes.Buffer
+	var cmd []string
+	if maxBytes > 0 {
+		cmd = []string{"head", "-c", strconv.FormatInt(maxBytes, 10), "--", p}
+	} else {
+		cmd = []string{"cat", "--", p}
+	}
+
+	code, err := f.Exec.Run(ctx, name, ExecOpts{Cmd: cmd, Stdout: &buf})
 	if err != nil {
-		return nil, false, fmt.Errorf("sftp: %w", err)
+		return nil, false, fmt.Errorf("read %s: %w", p, err)
 	}
-	defer sftp.Close()
-
-	f, err := sftp.Open(path)
-	if err != nil {
-		return nil, false, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer f.Close()
-
-	if maxBytes <= 0 {
-		b, err := io.ReadAll(f)
-		return b, false, err
+	if code != 0 {
+		return nil, false, fmt.Errorf("read %s: exit %d", p, code)
 	}
 
-	buf := make([]byte, maxBytes)
-	n, err := io.ReadFull(f, buf)
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
-		return nil, false, err
+	truncated := false
+	if maxBytes > 0 && int64(buf.Len()) >= maxBytes {
+		out, err := f.Exec.Output(ctx, name, []string{"stat", "-c", "%s", "--", p})
+		if err == nil {
+			if size, perr := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64); perr == nil && size > maxBytes {
+				truncated = true
+			}
+		}
 	}
-
-	// Read one more byte to detect truncation.
-	one := make([]byte, 1)
-	extra, _ := f.Read(one)
-	truncated := extra > 0
-	return buf[:n], truncated, nil
+	return buf.Bytes(), truncated, nil
 }
 
-// ListFiles returns directory contents at path. If recursive, descends.
-func ListFiles(c *sshclient.Client, path string, recursive bool) ([]FileEntry, error) {
-	sftp, err := c.SFTP()
-	if err != nil {
-		return nil, err
-	}
-	defer sftp.Close()
-
+// ListFiles uses `find -printf '%p\t%s\t%m\t%y\n'` to enumerate entries.
+// Non-recursive uses -maxdepth 1.
+func (f FilesViaExec) ListFiles(ctx context.Context, name, p string, recursive bool) ([]FileEntry, error) {
+	args := []string{"find", "--", p, "-mindepth", "1", "-printf", "%p\t%s\t%m\t%y\n"}
 	if !recursive {
-		infos, err := sftp.ReadDir(path)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]FileEntry, 0, len(infos))
-		for _, fi := range infos {
-			out = append(out, FileEntry{
-				Path:  filepath.Join(path, fi.Name()),
-				Size:  fi.Size(),
-				Mode:  fi.Mode().String(),
-				IsDir: fi.IsDir(),
-			})
-		}
-		return out, nil
+		args = []string{"find", "--", p, "-mindepth", "1", "-maxdepth", "1", "-printf", "%p\t%s\t%m\t%y\n"}
 	}
-
-	var out []FileEntry
-	w := sftp.Walk(path)
-	for w.Step() {
-		if err := w.Err(); err != nil {
+	out, err := f.Exec.Output(ctx, name, args)
+	if err != nil {
+		return nil, fmt.Errorf("find %s: %w", p, err)
+	}
+	var entries []FileEntry
+	for _, line := range strings.Split(string(out), "\n") {
+		if line == "" {
 			continue
 		}
-		fi := w.Stat()
-		if w.Path() == path {
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) != 4 {
 			continue
 		}
-		out = append(out, FileEntry{
-			Path:  w.Path(),
-			Size:  fi.Size(),
-			Mode:  fi.Mode().String(),
-			IsDir: fi.IsDir(),
+		size, _ := strconv.ParseInt(parts[1], 10, 64)
+		modeOct, _ := strconv.ParseUint(parts[2], 8, 32)
+		entries = append(entries, FileEntry{
+			Path:  parts[0],
+			Size:  size,
+			Mode:  os.FileMode(modeOct),
+			IsDir: parts[3] == "d",
 		})
 	}
-	return out, nil
+	return entries, nil
+}
+
+// DeleteFile removes a single file. Use `exec rm -rf` for recursive deletes.
+func (f FilesViaExec) DeleteFile(ctx context.Context, name, p string) error {
+	var stderr bytes.Buffer
+	code, err := f.Exec.Run(ctx, name, ExecOpts{
+		Cmd:    []string{"rm", "--", p},
+		Stderr: &stderr,
+	})
+	if err != nil {
+		return fmt.Errorf("rm %s: %w", p, err)
+	}
+	if code != 0 {
+		return fmt.Errorf("rm %s: exit %d: %s", p, code, stderr.String())
+	}
+	return nil
+}
+
+// readAll is a small helper that lets test files reuse the same name without
+// importing io directly. Production code uses io.ReadAll inline.
+func readAll(r io.Reader) ([]byte, error) {
+	if r == nil {
+		return nil, nil
+	}
+	return io.ReadAll(r)
 }
 ```
 
-**Step 4: Run**
+> **Engineer note on the test fake's `Ready` signature:** the real `Exec.Ready` takes `time.Duration`. If the test compiler complains about the `any` placeholder, change `fakeExec.Ready` to `func (f *fakeExec) Ready(ctx context.Context, name string, _ time.Duration) error`. Adapt and re-run.
+
+**Step 4: Run + commit**
 
 ```
-go test ./internal/mcp -v
-go build ./...
+go test ./sandbox -v
 ```
 
-Expected: PASS, build clean.
-
-**Step 5: Commit**
+Expected: PASS.
 
 ```bash
-git add internal/mcp/files.go internal/mcp/files_test.go
-git commit -m "feat(mcp): add SFTP-based write_file/read_file/list_files"
+git add sandbox/filesexec.go sandbox/filesexec_test.go sandbox/sandbox.go
+git commit -m "feat(sandbox): add Files capability and FilesViaExec helper"
 ```
 
 ---
 
-## Task 8: Implement reaper
+## Task 8: Implement `Files` on the Incus backend
+
+**Files:**
+- Modify: `sandbox/incus/incus.go`
+
+**Why:** Make `*Incus` satisfy the new `sandbox.Files` interface so `var _ sandbox.Sandbox = (*Incus)(nil)` compiles. We use the `FilesViaExec` helper rather than going to the Incus daemon's native file API in v1 — the helper is fast enough, and dropping in native file push/pull is a future optimization.
+
+**Step 1: Embed `FilesViaExec`**
+
+In `sandbox/incus/incus.go`, add the embedded helper field to the `Incus` struct:
+
+```go
+type Incus struct {
+	// ... existing fields ...
+
+	// Embedded helper provides WriteFile/ReadFile/ListFiles/DeleteFile via Run.
+	sandbox.FilesViaExec
+}
+```
+
+In `New(...)`, initialize the helper after the rest of the struct is built:
+
+```go
+func New(cfg map[string]string) (*Incus, error) {
+	// ... existing construction ...
+
+	i := &Incus{ /* existing field assignments */ }
+	i.FilesViaExec = sandbox.FilesViaExec{Exec: i}
+	return i, nil
+}
+```
+
+> **Engineer note:** `i.FilesViaExec.Exec = i` is safe even though `i` is being constructed — Go interface values capture the pointer, and the interface is only invoked at call time when `i` is fully populated.
+
+**Step 2: Build**
+
+```
+go build ./...
+```
+
+Expected: clean build for the Incus backend (TrueNAS still fails its `var _ sandbox.Sandbox = (*TrueNAS)(nil)` until Task 9).
+
+If the build fails because of an existing assertion in the same file, leave it — we expect it. But the Incus assertion specifically should now compile.
+
+**Step 3: Smoke test (optional but encouraged)**
+
+If you have a working Incus config locally:
+
+```
+go run . list
+go run . create test-mcp-files
+go run . exec test-mcp-files -- "echo hi"
+```
+
+Skip if you don't have an Incus environment configured.
+
+**Step 4: Commit**
+
+```bash
+git add sandbox/incus/incus.go
+git commit -m "feat(sandbox/incus): satisfy Files via embedded FilesViaExec"
+```
+
+---
+
+## Task 9: Implement `Files` on the TrueNAS backend
+
+**Files:**
+- Modify: `sandbox/truenas/truenas.go`
+
+**Step 1: Embed `FilesViaExec`**
+
+Same pattern as Task 8, applied to `*TrueNAS`:
+
+```go
+type TrueNAS struct {
+	// ... existing fields ...
+	sandbox.FilesViaExec
+}
+
+func New(cfg map[string]string) (*TrueNAS, error) {
+	// ... existing construction ...
+
+	t := &TrueNAS{ /* existing field assignments */ }
+	t.FilesViaExec = sandbox.FilesViaExec{Exec: t}
+	return t, nil
+}
+```
+
+**Step 2: Build all**
+
+```
+go build ./...
+go test ./...
+```
+
+Expected: clean build, all existing tests still pass.
+
+**Step 3: Commit**
+
+```bash
+git add sandbox/truenas/truenas.go
+git commit -m "feat(sandbox/truenas): satisfy Files via embedded FilesViaExec"
+```
+
+---
+
+## Task 10: Implement reaper
 
 **Files:**
 - Create: `internal/mcp/reaper.go`
 - Create: `internal/mcp/reaper_test.go`
 
 **Step 1: Write the failing test**
-
-Create `internal/mcp/reaper_test.go`:
 
 ```go
 package mcp
@@ -1466,11 +1315,11 @@ import (
 )
 
 type fakeBackend struct {
-	mu       sync.Mutex
-	stopped  []string
-	deleted  []string
-	stopErr  error
-	delErr   error
+	mu      sync.Mutex
+	stopped []string
+	deleted []string
+	stopErr error
+	delErr  error
 }
 
 func (b *fakeBackend) Stop(ctx context.Context, name string) error {
@@ -1494,7 +1343,7 @@ func TestReaperStopsIdle(t *testing.T) {
 		Name:           "idle",
 		Status:         "running",
 		CreatedAt:      now.Add(-2 * time.Hour),
-		LastActivityAt: now.Add(-90 * time.Minute), // > 1h idle
+		LastActivityAt: now.Add(-90 * time.Minute),
 	})
 	s.Add(Sandbox{
 		Name:           "active",
@@ -1516,10 +1365,6 @@ func TestReaperStopsIdle(t *testing.T) {
 	if len(be.stopped) != 1 || be.stopped[0] != "idle" {
 		t.Errorf("stopped = %v, want [idle]", be.stopped)
 	}
-	if len(be.deleted) != 0 {
-		t.Errorf("deleted = %v, want none", be.deleted)
-	}
-
 	got, _ := s.Get("idle")
 	if got.Status != "stopped" {
 		t.Errorf("idle status = %q, want stopped", got.Status)
@@ -1556,7 +1401,7 @@ func TestReaperDestroysOld(t *testing.T) {
 }
 ```
 
-**Step 2: Run to verify failure**
+**Step 2: Verify failure**
 
 ```
 go test ./internal/mcp -run TestReaper -v
@@ -1564,9 +1409,7 @@ go test ./internal/mcp -run TestReaper -v
 
 Expected: FAIL.
 
-**Step 3: Implement**
-
-Create `internal/mcp/reaper.go`:
+**Step 3: Implement `internal/mcp/reaper.go`**
 
 ```go
 package mcp
@@ -1579,7 +1422,6 @@ import (
 )
 
 // LifecycleBackend is the subset of sandbox.Backend that the reaper needs.
-// Defined locally so reaper tests don't need to satisfy the full Sandbox interface.
 type LifecycleBackend interface {
 	Stop(ctx context.Context, name string) error
 	Delete(ctx context.Context, name string) error
@@ -1639,16 +1481,13 @@ func (r *Reaper) Run(ctx context.Context, interval time.Duration) {
 }
 ```
 
-**Step 4: Run**
+**Step 4: Run + commit**
 
 ```
-go test ./internal/mcp -run TestReaper -v
-go build ./...
+go test ./internal/mcp -v
 ```
 
 Expected: PASS.
-
-**Step 5: Commit**
 
 ```bash
 git add internal/mcp/reaper.go internal/mcp/reaper_test.go
@@ -1657,23 +1496,13 @@ git commit -m "feat(mcp): add reaper with idle-stop and hard-destroy TTLs"
 
 ---
 
-## Task 9: Add MCP Go SDK dependency and tool layer
+## Task 11: Implement MCP tool layer
 
 **Files:**
-- Modify: `go.mod`, `go.sum`
 - Create: `internal/mcp/tools.go`
 - Create: `internal/mcp/tools_test.go`
 
-**Verify SDK API first:**
-
-```
-go get github.com/modelcontextprotocol/go-sdk@latest
-go doc github.com/modelcontextprotocol/go-sdk/mcp | head -80
-```
-
-Look for: `NewServer`, `AddTool`, `StreamableHTTPHandler`. The SDK signatures for `AddTool` may want a typed handler `func(ctx, *CallToolRequest, In) (*CallToolResult, Out, error)` or similar — adapt the Tool helpers below to the current signature.
-
-**Step 1: Define the tool input/output structs**
+**Step 1: Define inputs/outputs and handlers**
 
 Create `internal/mcp/tools.go`:
 
@@ -1685,30 +1514,28 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/deevus/pixels/internal/sshclient"
 	"github.com/deevus/pixels/sandbox"
 )
 
-// SandboxFactory builds an SSH client to a tracked sandbox. Injectable for tests.
-type SandboxFactory func(ctx context.Context, sb Sandbox) (*sshclient.Client, error)
-
 // Tools is the dependency bundle every MCP handler closes over.
 type Tools struct {
-	State    *State
-	Backend  sandbox.Sandbox
-	Connect  SandboxFactory
-	Prefix   string
-	DefaultImage string
+	State          *State
+	Backend        sandbox.Sandbox
+	Prefix         string
+	DefaultImage   string
 	ExecTimeoutMax time.Duration
 
 	// Per-sandbox mutex map. Tool handlers acquire the lock for the duration
-	// of an SSH/SFTP call so concurrent ops on one sandbox don't race.
-	mu       sync.Mutex
-	sbLocks  map[string]*sync.Mutex
+	// of any call that touches the container, so concurrent ops on the same
+	// sandbox don't race.
+	mu      sync.Mutex
+	sbLocks map[string]*sync.Mutex
 }
 
 func (t *Tools) sbMutex(name string) *sync.Mutex {
@@ -1773,7 +1600,7 @@ type WriteFileIn struct {
 	Name    string `json:"name"`
 	Path    string `json:"path"`
 	Content string `json:"content"`
-	Mode    string `json:"mode,omitempty"` // octal e.g. "0644"
+	Mode    string `json:"mode,omitempty"` // octal string e.g. "0644"
 }
 type WriteFileOut struct {
 	OK           bool `json:"ok"`
@@ -1796,7 +1623,24 @@ type ListFilesIn struct {
 	Recursive bool   `json:"recursive,omitempty"`
 }
 type ListFilesOut struct {
-	Entries []FileEntry `json:"entries"`
+	Entries []sandbox.FileEntry `json:"entries"`
+}
+
+type EditFileIn struct {
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	OldString  string `json:"old_string"`
+	NewString  string `json:"new_string"`
+	ReplaceAll bool   `json:"replace_all,omitempty"`
+}
+type EditFileOut struct {
+	OK           bool `json:"ok"`
+	Replacements int  `json:"replacements"`
+}
+
+type DeleteFileIn struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
 }
 
 // --- Helpers ---
@@ -1815,7 +1659,20 @@ func (t *Tools) requireSandbox(name string) (Sandbox, error) {
 	return sb, nil
 }
 
-// --- Handlers (return values, no MCP-SDK types here so tests are simple) ---
+func parseMode(s string, fallback os.FileMode) os.FileMode {
+	if s == "" {
+		return fallback
+	}
+	s = strings.TrimPrefix(s, "0o")
+	s = strings.TrimPrefix(s, "0")
+	n, err := strconv.ParseUint(s, 8, 32)
+	if err != nil {
+		return fallback
+	}
+	return os.FileMode(n)
+}
+
+// --- Lifecycle handlers ---
 
 func (t *Tools) CreateSandbox(ctx context.Context, in CreateSandboxIn) (CreateSandboxOut, error) {
 	image := in.Image
@@ -1823,14 +1680,10 @@ func (t *Tools) CreateSandbox(ctx context.Context, in CreateSandboxIn) (CreateSa
 		image = t.DefaultImage
 	}
 	name := t.generateName()
-	inst, err := t.Backend.Create(ctx, sandbox.CreateOpts{
-		Name:  name,
-		Image: image,
-	})
+	inst, err := t.Backend.Create(ctx, sandbox.CreateOpts{Name: name, Image: image})
 	if err != nil {
 		return CreateSandboxOut{}, fmt.Errorf("create: %w", err)
 	}
-
 	now := time.Now().UTC()
 	ip := ""
 	if len(inst.Addresses) > 0 {
@@ -1902,6 +1755,8 @@ func (t *Tools) ListSandboxes(ctx context.Context) (ListSandboxesOut, error) {
 	return ListSandboxesOut{Sandboxes: out}, nil
 }
 
+// --- Exec handler ---
+
 func (t *Tools) Exec(ctx context.Context, in ExecIn) (ExecOut, error) {
 	sb, err := t.requireSandbox(in.Name)
 	if err != nil {
@@ -1918,28 +1773,39 @@ func (t *Tools) Exec(ctx context.Context, in ExecIn) (ExecOut, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	c, err := t.Connect(ctx, sb)
-	if err != nil {
-		return ExecOut{}, err
+	cmd := in.Command
+	if in.Cwd != "" {
+		cmd = []string{"sh", "-c", "cd \"$1\" && shift && exec \"$@\"", "_", in.Cwd}
+		cmd = append(cmd, in.Command...)
 	}
-	defer c.Close()
 
-	res, err := c.Exec(ctx, in.Command, in.Env, in.Cwd)
-	if res == nil {
-		res = &sshclient.ExecResult{}
+	envSlice := make([]string, 0, len(in.Env))
+	for k, v := range in.Env {
+		envSlice = append(envSlice, k+"="+v)
 	}
+
+	var stdout, stderr strings.Builder
+	exit, err := t.Backend.Run(ctx, sb.Name, sandbox.ExecOpts{
+		Cmd:    cmd,
+		Env:    envSlice,
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
 	t.State.BumpActivity(sb.Name, time.Now().UTC())
 	_ = t.State.Save()
+
 	out := ExecOut{
-		ExitCode: res.ExitCode,
-		Stdout:   string(res.Stdout),
-		Stderr:   string(res.Stderr),
+		ExitCode: exit,
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
 	}
-	if err != nil && res.ExitCode == 0 {
+	if err != nil && exit == 0 {
 		return out, err
 	}
 	return out, nil
 }
+
+// --- File handlers ---
 
 func (t *Tools) WriteFile(ctx context.Context, in WriteFileIn) (WriteFileOut, error) {
 	sb, err := t.requireSandbox(in.Name)
@@ -1951,13 +1817,7 @@ func (t *Tools) WriteFile(ctx context.Context, in WriteFileIn) (WriteFileOut, er
 	mu.Lock()
 	defer mu.Unlock()
 
-	c, err := t.Connect(ctx, sb)
-	if err != nil {
-		return WriteFileOut{}, err
-	}
-	defer c.Close()
-
-	if err := WriteFile(c, in.Path, []byte(in.Content), mode); err != nil {
+	if err := t.Backend.WriteFile(ctx, sb.Name, in.Path, []byte(in.Content), mode); err != nil {
 		return WriteFileOut{}, err
 	}
 	t.State.BumpActivity(sb.Name, time.Now().UTC())
@@ -1974,13 +1834,7 @@ func (t *Tools) ReadFile(ctx context.Context, in ReadFileIn) (ReadFileOut, error
 	mu.Lock()
 	defer mu.Unlock()
 
-	c, err := t.Connect(ctx, sb)
-	if err != nil {
-		return ReadFileOut{}, err
-	}
-	defer c.Close()
-
-	body, truncated, err := ReadFile(c, in.Path, in.MaxBytes)
+	body, truncated, err := t.Backend.ReadFile(ctx, sb.Name, in.Path, in.MaxBytes)
 	if err != nil {
 		return ReadFileOut{}, err
 	}
@@ -1998,13 +1852,7 @@ func (t *Tools) ListFiles(ctx context.Context, in ListFilesIn) (ListFilesOut, er
 	mu.Lock()
 	defer mu.Unlock()
 
-	c, err := t.Connect(ctx, sb)
-	if err != nil {
-		return ListFilesOut{}, err
-	}
-	defer c.Close()
-
-	entries, err := ListFiles(c, in.Path, in.Recursive)
+	entries, err := t.Backend.ListFiles(ctx, sb.Name, in.Path, in.Recursive)
 	if err != nil {
 		return ListFilesOut{}, err
 	}
@@ -2013,24 +1861,72 @@ func (t *Tools) ListFiles(ctx context.Context, in ListFilesIn) (ListFilesOut, er
 	return ListFilesOut{Entries: entries}, nil
 }
 
-func parseMode(s string, fallback os.FileMode) os.FileMode {
-	if s == "" {
-		return fallback
+// EditFile is read-modify-write composed in the MCP layer. It mirrors the
+// shape of Claude's Edit tool: errors if old_string is missing or non-unique
+// (unless replace_all is true).
+func (t *Tools) EditFile(ctx context.Context, in EditFileIn) (EditFileOut, error) {
+	if in.OldString == "" {
+		return EditFileOut{}, fmt.Errorf("old_string must not be empty")
 	}
-	s = strings.TrimPrefix(s, "0o")
-	s = strings.TrimPrefix(s, "0")
-	var n int
-	for _, c := range s {
-		if c < '0' || c > '7' {
-			return fallback
-		}
-		n = n*8 + int(c-'0')
+	if in.OldString == in.NewString {
+		return EditFileOut{}, fmt.Errorf("old_string and new_string are identical")
 	}
-	return os.FileMode(n)
+	sb, err := t.requireSandbox(in.Name)
+	if err != nil {
+		return EditFileOut{}, err
+	}
+	mu := t.sbMutex(sb.Name)
+	mu.Lock()
+	defer mu.Unlock()
+
+	body, _, err := t.Backend.ReadFile(ctx, sb.Name, in.Path, 0)
+	if err != nil {
+		return EditFileOut{}, fmt.Errorf("read: %w", err)
+	}
+	original := string(body)
+	count := strings.Count(original, in.OldString)
+	switch {
+	case count == 0:
+		return EditFileOut{}, fmt.Errorf("old_string not found in %s", in.Path)
+	case count > 1 && !in.ReplaceAll:
+		return EditFileOut{}, fmt.Errorf("old_string appears %d times in %s; pass replace_all=true or include more context", count, in.Path)
+	}
+
+	var updated string
+	if in.ReplaceAll {
+		updated = strings.ReplaceAll(original, in.OldString, in.NewString)
+	} else {
+		updated = strings.Replace(original, in.OldString, in.NewString, 1)
+	}
+
+	// Preserve mode best-effort. ReadFile doesn't expose it, so default to 0644.
+	// For finer fidelity we could ListFiles on the parent and look it up, but
+	// 0644 is the right default for source files and matches what most editors
+	// land on.
+	if err := t.Backend.WriteFile(ctx, sb.Name, in.Path, []byte(updated), 0o644); err != nil {
+		return EditFileOut{}, fmt.Errorf("write: %w", err)
+	}
+	t.State.BumpActivity(sb.Name, time.Now().UTC())
+	_ = t.State.Save()
+	return EditFileOut{OK: true, Replacements: count}, nil
+}
+
+func (t *Tools) DeleteFile(ctx context.Context, in DeleteFileIn) (Ack, error) {
+	sb, err := t.requireSandbox(in.Name)
+	if err != nil {
+		return Ack{}, err
+	}
+	mu := t.sbMutex(sb.Name)
+	mu.Lock()
+	defer mu.Unlock()
+	if err := t.Backend.DeleteFile(ctx, sb.Name, in.Path); err != nil {
+		return Ack{}, err
+	}
+	t.State.BumpActivity(sb.Name, time.Now().UTC())
+	_ = t.State.Save()
+	return Ack{OK: true}, nil
 }
 ```
-
-(Add `"os"` to imports.)
 
 **Step 2: Write a unit test for the in-memory bits**
 
@@ -2049,52 +1945,93 @@ import (
 )
 
 type fakeSandbox struct {
-	created  []sandbox.CreateOpts
-	deleted  []string
-	stopped  []string
-	started  []string
-	gets     []string
-	getResp  *sandbox.Instance
+	created []sandbox.CreateOpts
+	deleted []string
+	stopped []string
+	started []string
+	files   map[string][]byte
 }
+
+func newFakeSandbox() *fakeSandbox { return &fakeSandbox{files: make(map[string][]byte)} }
 
 func (f *fakeSandbox) Create(ctx context.Context, o sandbox.CreateOpts) (*sandbox.Instance, error) {
 	f.created = append(f.created, o)
 	return &sandbox.Instance{Name: o.Name, Status: sandbox.StatusRunning, Addresses: []string{"10.0.0.1"}}, nil
 }
 func (f *fakeSandbox) Get(ctx context.Context, n string) (*sandbox.Instance, error) {
-	f.gets = append(f.gets, n)
-	if f.getResp != nil {
-		return f.getResp, nil
-	}
 	return &sandbox.Instance{Name: n, Status: sandbox.StatusRunning, Addresses: []string{"10.0.0.1"}}, nil
 }
-func (f *fakeSandbox) List(ctx context.Context) ([]sandbox.Instance, error)         { return nil, nil }
-func (f *fakeSandbox) Start(ctx context.Context, n string) error                    { f.started = append(f.started, n); return nil }
-func (f *fakeSandbox) Stop(ctx context.Context, n string) error                     { f.stopped = append(f.stopped, n); return nil }
-func (f *fakeSandbox) Delete(ctx context.Context, n string) error                   { f.deleted = append(f.deleted, n); return nil }
-func (f *fakeSandbox) CreateSnapshot(ctx context.Context, n, l string) error        { return nil }
-func (f *fakeSandbox) ListSnapshots(ctx context.Context, n string) ([]sandbox.Snapshot, error) { return nil, nil }
-func (f *fakeSandbox) DeleteSnapshot(ctx context.Context, n, l string) error        { return nil }
-func (f *fakeSandbox) RestoreSnapshot(ctx context.Context, n, l string) error       { return nil }
-func (f *fakeSandbox) CloneFrom(ctx context.Context, src, lbl, nn string) error     { return nil }
+func (f *fakeSandbox) List(ctx context.Context) ([]sandbox.Instance, error) { return nil, nil }
+func (f *fakeSandbox) Start(ctx context.Context, n string) error            { f.started = append(f.started, n); return nil }
+func (f *fakeSandbox) Stop(ctx context.Context, n string) error             { f.stopped = append(f.stopped, n); return nil }
+func (f *fakeSandbox) Delete(ctx context.Context, n string) error           { f.deleted = append(f.deleted, n); return nil }
+func (f *fakeSandbox) CreateSnapshot(ctx context.Context, n, l string) error { return nil }
+func (f *fakeSandbox) ListSnapshots(ctx context.Context, n string) ([]sandbox.Snapshot, error) {
+	return nil, nil
+}
+func (f *fakeSandbox) DeleteSnapshot(ctx context.Context, n, l string) error    { return nil }
+func (f *fakeSandbox) RestoreSnapshot(ctx context.Context, n, l string) error   { return nil }
+func (f *fakeSandbox) CloneFrom(ctx context.Context, src, lbl, nn string) error { return nil }
 func (f *fakeSandbox) Run(ctx context.Context, n string, o sandbox.ExecOpts) (int, error) {
 	return 0, nil
 }
-func (f *fakeSandbox) Output(ctx context.Context, n string, c []string) ([]byte, error) { return nil, nil }
+func (f *fakeSandbox) Output(ctx context.Context, n string, c []string) ([]byte, error) {
+	return nil, nil
+}
 func (f *fakeSandbox) Console(ctx context.Context, n string, o sandbox.ConsoleOpts) error { return nil }
-func (f *fakeSandbox) Ready(ctx context.Context, n string, t time.Duration) error   { return nil }
-func (f *fakeSandbox) SetEgressMode(ctx context.Context, n string, m sandbox.EgressMode) error { return nil }
-func (f *fakeSandbox) AllowDomain(ctx context.Context, n, d string) error           { return nil }
-func (f *fakeSandbox) DenyDomain(ctx context.Context, n, d string) error            { return nil }
-func (f *fakeSandbox) GetPolicy(ctx context.Context, n string) (*sandbox.Policy, error) { return nil, nil }
-func (f *fakeSandbox) Capabilities() sandbox.Capabilities                            { return sandbox.Capabilities{} }
-func (f *fakeSandbox) Close() error                                                  { return nil }
+func (f *fakeSandbox) Ready(ctx context.Context, n string, t time.Duration) error         { return nil }
+func (f *fakeSandbox) SetEgressMode(ctx context.Context, n string, m sandbox.EgressMode) error {
+	return nil
+}
+func (f *fakeSandbox) AllowDomain(ctx context.Context, n, d string) error { return nil }
+func (f *fakeSandbox) DenyDomain(ctx context.Context, n, d string) error  { return nil }
+func (f *fakeSandbox) GetPolicy(ctx context.Context, n string) (*sandbox.Policy, error) {
+	return nil, nil
+}
+func (f *fakeSandbox) Capabilities() sandbox.Capabilities { return sandbox.Capabilities{} }
+func (f *fakeSandbox) Close() error                       { return nil }
 
+// Files (in-memory implementations so EditFile etc. round-trip).
+func (f *fakeSandbox) WriteFile(ctx context.Context, name, path string, content []byte, mode any) error {
+	cp := make([]byte, len(content))
+	copy(cp, content)
+	f.files[path] = cp
+	return nil
+}
+func (f *fakeSandbox) ReadFile(ctx context.Context, name, path string, maxBytes int64) ([]byte, bool, error) {
+	b, ok := f.files[path]
+	if !ok {
+		return nil, false, &fileNotFound{path}
+	}
+	if maxBytes > 0 && int64(len(b)) > maxBytes {
+		return b[:maxBytes], true, nil
+	}
+	return b, false, nil
+}
+func (f *fakeSandbox) ListFiles(ctx context.Context, name, path string, recursive bool) ([]sandbox.FileEntry, error) {
+	return nil, nil
+}
+func (f *fakeSandbox) DeleteFile(ctx context.Context, name, path string) error {
+	delete(f.files, path)
+	return nil
+}
+
+type fileNotFound struct{ path string }
+
+func (e *fileNotFound) Error() string { return "no such file: " + e.path }
+
+// Note: WriteFile's `mode` arg uses `any` to avoid pulling os.FileMode into
+// the test fake — adjust to os.FileMode if your linter complains.
+```
+
+> **Engineer note:** if your fake's signature mismatches the interface, change `mode any` to `os.FileMode` and add `"os"` to imports. The tests below depend on the in-memory `files` map.
+
+```go
 func newTestTools(t *testing.T) (*Tools, *fakeSandbox) {
 	t.Helper()
 	dir := t.TempDir()
 	s, _ := LoadState(filepath.Join(dir, "s.json"))
-	be := &fakeSandbox{}
+	be := newFakeSandbox()
 	return &Tools{
 		State:          s,
 		Backend:        be,
@@ -2132,53 +2069,126 @@ func TestDestroyRemovesState(t *testing.T) {
 	}
 }
 
-func TestStopUpdatesStatus(t *testing.T) {
-	tt, _ := newTestTools(t)
+func TestEditFileReplacesUnique(t *testing.T) {
+	tt, be := newTestTools(t)
 	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
-	if _, err := tt.StopSandbox(context.Background(), SandboxRef{Name: out.Name}); err != nil {
+	be.files["/app/main.py"] = []byte("print('hi')\n")
+
+	res, err := tt.EditFile(context.Background(), EditFileIn{
+		Name:      out.Name,
+		Path:      "/app/main.py",
+		OldString: "hi",
+		NewString: "hello",
+	})
+	if err != nil {
+		t.Fatalf("EditFile: %v", err)
+	}
+	if res.Replacements != 1 {
+		t.Errorf("Replacements = %d, want 1", res.Replacements)
+	}
+	if got := string(be.files["/app/main.py"]); got != "print('hello')\n" {
+		t.Errorf("file content = %q", got)
+	}
+}
+
+func TestEditFileMissingErrors(t *testing.T) {
+	tt, be := newTestTools(t)
+	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+	be.files["/x"] = []byte("abc")
+	_, err := tt.EditFile(context.Background(), EditFileIn{
+		Name:      out.Name,
+		Path:      "/x",
+		OldString: "z",
+		NewString: "y",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing old_string")
+	}
+}
+
+func TestEditFileNonUniqueErrors(t *testing.T) {
+	tt, be := newTestTools(t)
+	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+	be.files["/x"] = []byte("aaa")
+	_, err := tt.EditFile(context.Background(), EditFileIn{
+		Name:      out.Name,
+		Path:      "/x",
+		OldString: "a",
+		NewString: "b",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-unique old_string without replace_all")
+	}
+}
+
+func TestEditFileReplaceAll(t *testing.T) {
+	tt, be := newTestTools(t)
+	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+	be.files["/x"] = []byte("aaa")
+	res, err := tt.EditFile(context.Background(), EditFileIn{
+		Name:       out.Name,
+		Path:       "/x",
+		OldString:  "a",
+		NewString:  "b",
+		ReplaceAll: true,
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	got, _ := tt.State.Get(out.Name)
-	if got.Status != "stopped" {
-		t.Errorf("status = %q, want stopped", got.Status)
+	if res.Replacements != 3 {
+		t.Errorf("Replacements = %d, want 3", res.Replacements)
+	}
+	if string(be.files["/x"]) != "bbb" {
+		t.Errorf("content = %q", be.files["/x"])
+	}
+}
+
+func TestDeleteFileRemoves(t *testing.T) {
+	tt, be := newTestTools(t)
+	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+	be.files["/x"] = []byte("data")
+	if _, err := tt.DeleteFile(context.Background(), DeleteFileIn{Name: out.Name, Path: "/x"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := be.files["/x"]; ok {
+		t.Error("file should be deleted")
 	}
 }
 ```
 
-**Step 3: Run**
+**Step 3: Run + commit**
 
 ```
-go mod tidy
 go test ./internal/mcp -v
 go build ./...
 ```
 
-Expected: PASS.
-
-**Step 4: Commit**
+Expected: PASS, build clean.
 
 ```bash
-git add internal/mcp/tools.go internal/mcp/tools_test.go go.mod go.sum
-git commit -m "feat(mcp): add tool layer with create/start/stop/destroy/exec/files"
+git add internal/mcp/tools.go internal/mcp/tools_test.go
+git commit -m "feat(mcp): add tool layer with lifecycle, exec, and file CRUD+edit"
 ```
 
 ---
 
-## Task 10: Wire up the MCP server (streamable-HTTP)
+## Task 12: Wire up the streamable-HTTP server
 
 **Files:**
 - Create: `internal/mcp/server.go`
 - Create: `internal/mcp/server_test.go`
+- Modify: `go.mod`, `go.sum`
 
-**Verify SDK before implementing.** Run:
+**Verify SDK API first:**
 
 ```
+go get github.com/modelcontextprotocol/go-sdk@latest
 go doc github.com/modelcontextprotocol/go-sdk/mcp NewServer
 go doc github.com/modelcontextprotocol/go-sdk/mcp AddTool
 go doc github.com/modelcontextprotocol/go-sdk/mcp StreamableHTTPHandler
 ```
 
-Adapt the calls below to match the current API. The current shape (early 2026) is roughly:
+The current shape (early 2026) is roughly:
 
 ```go
 import sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -2189,7 +2199,7 @@ handler := sdk.NewStreamableHTTPHandler(func(r *http.Request) *sdk.Server { retu
 http.Handle(endpointPath, handler)
 ```
 
-If `AddTool` expects a different handler shape (e.g. `func(ctx, *CallToolRequest, In) (*CallToolResult, Out, error)`), wrap each `Tools.Foo` in a small adapter that forwards arguments and discards/builds the unused parts.
+If `AddTool` requires a different handler signature (e.g. `func(ctx, *CallToolRequest, In) (*CallToolResult, Out, error)`), wrap each `Tools.Foo` in a small adapter that forwards arguments and constructs the SDK response wrapper.
 
 **Step 1: Implement `internal/mcp/server.go`**
 
@@ -2209,7 +2219,6 @@ import (
 type ServerOpts struct {
 	State          *State
 	Backend        sandbox.Sandbox
-	Connect        SandboxFactory
 	Prefix         string
 	DefaultImage   string
 	ExecTimeoutMax time.Duration
@@ -2220,7 +2229,6 @@ func NewServer(opts ServerOpts, endpointPath string) (http.Handler, *Tools) {
 	tools := &Tools{
 		State:          opts.State,
 		Backend:        opts.Backend,
-		Connect:        opts.Connect,
 		Prefix:         opts.Prefix,
 		DefaultImage:   opts.DefaultImage,
 		ExecTimeoutMax: opts.ExecTimeoutMax,
@@ -2228,26 +2236,17 @@ func NewServer(opts ServerOpts, endpointPath string) (http.Handler, *Tools) {
 
 	srv := sdk.NewServer(&sdk.Implementation{Name: "pixels-mcp", Version: "0.1.0"}, nil)
 
-	// Each call below registers one tool. Adapt the handler signature to the
-	// current SDK shape — the underlying Tools method returns (Out, error).
-	sdk.AddTool(srv, &sdk.Tool{Name: "create_sandbox", Description: "Create a new ephemeral sandbox container."},
-		adapt0(tools.CreateSandbox))
-	sdk.AddTool(srv, &sdk.Tool{Name: "destroy_sandbox", Description: "Destroy a sandbox and its filesystem."},
-		adapt1(tools.DestroySandbox))
-	sdk.AddTool(srv, &sdk.Tool{Name: "start_sandbox", Description: "Start (resume) a stopped sandbox."},
-		adapt0(tools.StartSandbox))
-	sdk.AddTool(srv, &sdk.Tool{Name: "stop_sandbox", Description: "Stop (pause) a running sandbox."},
-		adapt1(tools.StopSandbox))
-	sdk.AddTool(srv, &sdk.Tool{Name: "list_sandboxes", Description: "List all tracked sandboxes."},
-		adaptList(tools.ListSandboxes))
-	sdk.AddTool(srv, &sdk.Tool{Name: "exec", Description: "Run a command inside a sandbox."},
-		adapt2(tools.Exec))
-	sdk.AddTool(srv, &sdk.Tool{Name: "write_file", Description: "Write a file inside a sandbox."},
-		adapt2(tools.WriteFile))
-	sdk.AddTool(srv, &sdk.Tool{Name: "read_file", Description: "Read a file from a sandbox."},
-		adapt2(tools.ReadFile))
-	sdk.AddTool(srv, &sdk.Tool{Name: "list_files", Description: "List files inside a sandbox path."},
-		adapt2(tools.ListFiles))
+	sdk.AddTool(srv, &sdk.Tool{Name: "create_sandbox", Description: "Create a new ephemeral sandbox container."}, tools.CreateSandbox)
+	sdk.AddTool(srv, &sdk.Tool{Name: "destroy_sandbox", Description: "Destroy a sandbox and its filesystem."}, tools.DestroySandbox)
+	sdk.AddTool(srv, &sdk.Tool{Name: "start_sandbox", Description: "Start (resume) a stopped sandbox."}, tools.StartSandbox)
+	sdk.AddTool(srv, &sdk.Tool{Name: "stop_sandbox", Description: "Stop (pause) a running sandbox."}, tools.StopSandbox)
+	sdk.AddTool(srv, &sdk.Tool{Name: "list_sandboxes", Description: "List all tracked sandboxes."}, tools.ListSandboxes)
+	sdk.AddTool(srv, &sdk.Tool{Name: "exec", Description: "Run a command inside a sandbox."}, tools.Exec)
+	sdk.AddTool(srv, &sdk.Tool{Name: "write_file", Description: "Write a file inside a sandbox (create or full overwrite)."}, tools.WriteFile)
+	sdk.AddTool(srv, &sdk.Tool{Name: "read_file", Description: "Read a file from a sandbox, optionally truncated."}, tools.ReadFile)
+	sdk.AddTool(srv, &sdk.Tool{Name: "list_files", Description: "List files inside a sandbox path."}, tools.ListFiles)
+	sdk.AddTool(srv, &sdk.Tool{Name: "edit_file", Description: "Replace one occurrence of old_string with new_string in a file. Pass replace_all=true to replace every occurrence."}, tools.EditFile)
+	sdk.AddTool(srv, &sdk.Tool{Name: "delete_file", Description: "Delete a single file from a sandbox."}, tools.DeleteFile)
 
 	handler := sdk.NewStreamableHTTPHandler(func(r *http.Request) *sdk.Server { return srv }, nil)
 	mux := http.NewServeMux()
@@ -2255,32 +2254,30 @@ func NewServer(opts ServerOpts, endpointPath string) (http.Handler, *Tools) {
 	return mux, tools
 }
 
-// adapt* helpers convert (ctx, In) -> (Out, error) handlers into whatever
-// signature the SDK expects. Keep these wrappers tiny and adjust to the SDK
-// version in use.
-
-type any2 = any
-
-// Replace the bodies of these helpers with the correct SDK adaptation. They
-// exist as named placeholders so the call sites above stay readable. If the
-// SDK exposes a generic `func[Args, Result any](ctx, *CallToolRequest, Args)`,
-// these become one-liner forwards.
-func adapt0[I, O any](fn func(context.Context, I) (O, error)) any { return fn }
-func adapt1[I, O any](fn func(context.Context, I) (O, error)) any { return fn }
-func adapt2[I, O any](fn func(context.Context, I) (O, error)) any { return fn }
-func adaptList[O any](fn func(context.Context) (O, error)) any   { return fn }
+// _ assigns ctx so it isn't reported unused if a future SDK adapter drops it.
+var _ context.Context = nil
 ```
 
-> **Engineer note:** the `adapt*` helpers are placeholders. Once you've checked the SDK signature with `go doc`, replace them with real wrappers and update the `sdk.AddTool(...)` call signatures. The function bodies above compile only if `AddTool` accepts `any`; in practice you'll define the wrappers to match `func(context.Context, *sdk.CallToolRequest, In) (*sdk.CallToolResult, Out, error)` (or whatever the current SDK exposes), and forward the tool method's return values into that shape.
+> **Engineer note:** if `AddTool` rejects the `func(ctx, In) (Out, error)` shape directly, wrap each handler in a thin adapter:
+>
+> ```go
+> func adapt[I, O any](fn func(context.Context, I) (O, error)) func(ctx context.Context, req *sdk.CallToolRequest, in I) (*sdk.CallToolResult, O, error) {
+>     return func(ctx context.Context, _ *sdk.CallToolRequest, in I) (*sdk.CallToolResult, O, error) {
+>         out, err := fn(ctx, in)
+>         return nil, out, err
+>     }
+> }
+> ```
+>
+> ...and pass `adapt(tools.CreateSandbox)` etc. into AddTool.
 
 **Step 2: Write a smoke test**
-
-Create `internal/mcp/server_test.go`:
 
 ```go
 package mcp
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -2290,7 +2287,7 @@ import (
 func TestNewServerMountsHandler(t *testing.T) {
 	dir := t.TempDir()
 	st, _ := LoadState(filepath.Join(dir, "s.json"))
-	be := &fakeSandbox{}
+	be := newFakeSandbox()
 
 	mux, _ := NewServer(ServerOpts{
 		State:          st,
@@ -2307,44 +2304,35 @@ func TestNewServerMountsHandler(t *testing.T) {
 		t.Fatalf("get: %v", err)
 	}
 	defer resp.Body.Close()
-	// We don't assert on the body — many MCP SDKs reject non-MCP-handshake
-	// GETs with 4xx. The check is just "endpoint mounted, server didn't 500
-	// on a stray request".
 	if resp.StatusCode >= 500 {
 		t.Errorf("unexpected 5xx: %d", resp.StatusCode)
 	}
 }
 ```
 
-(Add `"net/http"` to imports.)
-
-**Step 3: Run**
+**Step 3: Run + commit**
 
 ```
+go mod tidy
 go test ./internal/mcp -v
 go build ./...
 ```
 
 Expected: PASS.
 
-**Step 4: Commit**
-
 ```bash
 git add internal/mcp/server.go internal/mcp/server_test.go go.mod go.sum
-git commit -m "feat(mcp): wire streamable-HTTP server with tool registrations"
+git commit -m "feat(mcp): wire streamable-HTTP server with all tool registrations"
 ```
 
 ---
 
-## Task 11: Add cobra `pixels mcp` subcommand
+## Task 13: Add `pixels mcp` cobra subcommand
 
 **Files:**
 - Create: `cmd/mcp.go`
-- Modify: `cmd/root.go` (only if needed — usually no change)
 
 **Step 1: Implement the command**
-
-Create `cmd/mcp.go`:
 
 ```go
 package cmd
@@ -2355,13 +2343,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/deevus/pixels/internal/config"
 	mcppkg "github.com/deevus/pixels/internal/mcp"
-	"github.com/deevus/pixels/internal/sshclient"
-	"github.com/deevus/pixels/sandbox"
 	"github.com/spf13/cobra"
 )
 
@@ -2436,12 +2423,9 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	connect := makeConnectFn(cfg)
-
 	mux, _ := mcppkg.NewServer(mcppkg.ServerOpts{
 		State:          state,
 		Backend:        sb,
-		Connect:        connect,
 		Prefix:         cfg.MCP.Prefix,
 		DefaultImage:   defaultImg,
 		ExecTimeoutMax: execMax,
@@ -2456,12 +2440,8 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	reaper.Tick(ctx) // immediate startup pass
 	go reaper.Run(ctx, reapInterval)
 
-	srv := &http.Server{
-		Addr:    listenAddr,
-		Handler: mux,
-	}
+	srv := &http.Server{Addr: listenAddr, Handler: mux}
 
-	// non-loopback warning
 	if !isLoopback(listenAddr) {
 		fmt.Fprintf(os.Stderr, "pixels mcp: WARNING bound non-loopback address %q with no auth\n", listenAddr)
 	}
@@ -2489,18 +2469,6 @@ func runMCP(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func makeConnectFn(cfg *config.Config) mcppkg.SandboxFactory {
-	return func(ctx context.Context, sb mcppkg.Sandbox) (*sshclient.Client, error) {
-		return sshclient.NewClient(ctx, sshclient.Config{
-			Host:           sb.IP,
-			User:           cfg.SSH.User,
-			KeyPath:        cfg.SSH.Key,
-			KnownHostsPath: config.KnownHostsPath(),
-			Timeout:        10 * time.Second,
-		})
-	}
-}
-
 func pickStr(override, fallback string) string {
 	if override != "" {
 		return override
@@ -2509,22 +2477,22 @@ func pickStr(override, fallback string) string {
 }
 
 func isLoopback(addr string) bool {
-	return len(addr) >= 3 && (addr[:3] == "127" || addr[:9] == "localhost")
+	return strings.HasPrefix(addr, "127.") || strings.HasPrefix(addr, "localhost")
 }
 ```
 
-> **Engineer note:** if the existing root command stores config under a different context key, replace `configKey` accordingly. Look at `cmd/root.go`'s `PersistentPreRunE` to see how config is propagated to subcommands and reuse the same key.
+> **Engineer note:** the `configKey` reference must match how `cmd/root.go` propagates config. Look at the `PersistentPreRunE` in `cmd/root.go` and reuse the same context key. If the existing pattern instead reads a package-level variable (e.g. `cfg`), drop the context lookup and use that instead.
 
-**Step 2: Build and confirm the subcommand registers**
+**Step 2: Build and confirm**
 
 ```
 go build -o pixels .
 ./pixels mcp --help
 ```
 
-Expected: help text printed, including `--listen-addr`, `--state-file`, `--pid-file` flags.
+Expected: help text with the three flags.
 
-**Step 3: Run unit tests**
+**Step 3: Run tests**
 
 ```
 go test ./... -v
@@ -2541,21 +2509,19 @@ git commit -m "feat(cmd): add 'pixels mcp' subcommand"
 
 ---
 
-## Task 12: End-to-end smoke documentation
+## Task 14: README documentation
 
 **Files:**
-- Modify: `README.md` (add a "Using as MCP server" section)
+- Modify: `README.md`
 
-**Step 1: Append to `README.md`**
-
-Add a new top-level section:
+**Step 1: Append a section**
 
 ```markdown
 ## Using `pixels` as an MCP code-sandbox server
 
 `pixels mcp` runs a streamable-HTTP MCP server that exposes container
-lifecycle and code execution as MCP tools. Run it once on your machine,
-then point any number of MCP clients at it.
+lifecycle, exec, and file CRUD as MCP tools. Run it once on your
+machine, then point any number of MCP clients at it.
 
 ### Start the daemon
 
@@ -2583,7 +2549,11 @@ Claude Code MCP entry:
 | `list_sandboxes` | List tracked sandboxes |
 | `start_sandbox` / `stop_sandbox` / `destroy_sandbox` | Lifecycle |
 | `exec` | Run a command inside a sandbox |
-| `write_file` / `read_file` / `list_files` | SFTP-backed file I/O |
+| `write_file` | Create or fully overwrite a file |
+| `read_file` | Read a file (optional truncation via `max_bytes`) |
+| `edit_file` | Replace `old_string` with `new_string` (with optional `replace_all`) |
+| `delete_file` | Remove a file |
+| `list_files` | List directory contents (optionally recursive) |
 
 ### Lifetimes
 
@@ -2611,12 +2581,15 @@ curl -i http://127.0.0.1:8765/mcp
 
 Expected: a valid HTTP response (the SDK will likely 4xx a non-MCP request, which is fine — we just want "server is up").
 
-Try a real client run by pointing Claude Code at the URL and calling `create_sandbox` from a chat. Confirm:
+Real client flow: point Claude Code at the URL and from a chat:
 
-- Container appears in `pixels list`.
-- `exec` works (e.g. `python3 -c 'print(1)'`).
-- `write_file` followed by `read_file` round-trips content.
-- After `destroy_sandbox`, the container is gone from `pixels list`.
+1. `create_sandbox` — confirm container shows up in `pixels list`.
+2. `write_file` → `read_file` round-trips byte-for-byte.
+3. `edit_file` with a unique substring updates the file in place.
+4. `edit_file` with a non-unique substring without `replace_all` returns an error.
+5. `delete_file` removes the file (verify with `list_files`).
+6. `exec` runs a command and returns stdout/stderr/exit code.
+7. `destroy_sandbox` removes the container from `pixels list`.
 
 **Step 3: Commit**
 
@@ -2627,7 +2600,7 @@ git commit -m "docs: document 'pixels mcp' server usage and tool surface"
 
 ---
 
-## Task 13: Final cleanup
+## Task 15: Final cleanup
 
 **Step 1: Run the full test + build matrix**
 
@@ -2639,20 +2612,15 @@ go vet ./...
 
 All three should pass clean.
 
-**Step 2: Confirm no leftover TODOs or `panic("not implemented")`**
+**Step 2: Confirm no leftover TODOs**
 
 ```
-grep -rn "TODO\|FIXME\|panic(\"not implemented\")" internal/mcp internal/sshclient cmd/mcp.go
+grep -rn "TODO\|FIXME\|panic(\"not implemented\")" internal/mcp sandbox/filesexec.go cmd/mcp.go
 ```
 
 Expected: no output (or only intentional TODOs you want to keep).
 
-**Step 3: Update `MEMORY.md` (optional)**
-
-If anything surprising came up during implementation that should persist
-across sessions, save a feedback or project memory.
-
-**Step 4: Final commit only if anything changed**
+**Step 3: Final commit only if anything changed**
 
 If the cleanup pass produced edits:
 
@@ -2669,10 +2637,13 @@ Otherwise nothing to do.
 These are explicitly *not* in this plan and should be left alone:
 
 - Auth tokens / TLS — loopback-only is the trust boundary.
+- Native Incus file push/pull — `FilesViaExec` is fine for v1; swap in later if performance matters.
+- MultiEdit (batched edits in one tool call).
+- `mkdir`, `rename`, `move` tools — agents use `exec` for these.
+- Recursive directory delete — agents use `exec rm -rf` for these.
 - Checkpoint/restore as MCP tools.
 - Network-policy MCP tools.
 - A `pixels mcp doctor` subcommand.
 - Streaming `read_file_chunk(offset, length)`.
 
-If you find yourself wanting one of these, stop and check with the user
-first.
+If you find yourself wanting one of these, stop and check with the user first.

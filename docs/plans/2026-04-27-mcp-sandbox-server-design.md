@@ -29,18 +29,20 @@ pixels mcp                            # new cobra subcommand
 └── on SIGTERM/SIGINT: flush state, release pidfile, exit
 
 internal/mcp/                         # new package
-├── server.go      — MCP protocol handlers, tool dispatch
-├── http.go        — streamable-HTTP transport, signal handling, pidfile
-├── tools.go       — tool definitions + JSON schemas
+├── server.go      — MCP protocol handlers, tool dispatch, streamable-HTTP wiring
+├── tools.go       — tool definitions, lifecycle/exec/file CRUD/edit handlers
 ├── state.go       — state file load/save, last-activity tracking (in-memory + atomic write)
 ├── reaper.go      — TTL enforcement loop
-└── files.go       — write_file/read_file/list_files via SFTP
+└── pidfile.go     — single-instance pidfile lock
+
+sandbox/                              # interface extension
+├── sandbox.go     — adds Files capability (WriteFile/ReadFile/ListFiles/DeleteFile)
+└── filesexec.go   — FilesViaExec helper: implements Files via shell over Exec
 
 reuses:
-internal/config    — extended with [mcp] section
-internal/truenas   — create/start/stop/destroy unchanged
-internal/ssh       — Exec already works; SFTP added (golang.org/x/crypto/ssh/sftp)
-internal/retry     — wraps WaitReady for newly-created sandboxes
+internal/config           — extended with [mcp] section
+sandbox/incus, truenas    — embed FilesViaExec to satisfy the new Files interface;
+                            create/start/stop/delete/exec unchanged
 ```
 
 The MCP server is a single long-running daemon. The user starts it once
@@ -67,8 +69,8 @@ The reaper is a single goroutine ticking on `mcp.reap_interval` (default
 
 1. Snapshot in-memory state under read lock.
 2. For every sandbox: if `now - last_activity_at > idle_stop_after` and
-   status is `running`, call `truenas.Stop()` and update status.
-3. If `now - created_at > hard_destroy_after`, call `truenas.Destroy()`
+   status is `running`, call `Backend.Stop()` and update status.
+3. If `now - created_at > hard_destroy_after`, call `Backend.Delete()`
    and remove the entry.
 4. Persist state with atomic write (write to `mcp-state.json.tmp`,
    `os.Rename` to final path).
@@ -103,7 +105,15 @@ State file (`~/.cache/pixels/mcp-state.json`):
 | `exec` | `name`, `command[]`, `cwd?`, `env?`, `timeout_sec?` | `{exit_code, stdout, stderr}` |
 | `write_file` | `name`, `path`, `content`, `mode?` | `{ok, bytes_written}` |
 | `read_file` | `name`, `path`, `max_bytes?` | `{content, truncated}` |
+| `edit_file` | `name`, `path`, `old_string`, `new_string`, `replace_all?` | `{ok, replacements}` |
+| `delete_file` | `name`, `path` | `{ok}` |
 | `list_files` | `name`, `path`, `recursive?` | `[{path, size, mode, is_dir}]` |
+
+`edit_file` mirrors Claude's Edit tool: errors if `old_string` is missing
+or non-unique unless `replace_all=true`. Implemented in the MCP layer as
+read-modify-write composition over the `Files` interface — no new backend
+primitive needed. `mkdir`, `rename`, and recursive directory delete are
+left out of v1; agents can do them via `exec`.
 
 Notes:
 
@@ -166,10 +176,10 @@ Three dimensions:
    struct is guarded by a `sync.RWMutex`. Tool handlers take the write
    lock briefly to bump `last_activity_at` and to add/remove sandboxes;
    the reaper takes the read lock to snapshot, then write lock to commit
-   pruning. SSH/SFTP I/O happens *outside* the state lock — only a
-   per-sandbox mutex (held just for the duration of the call) prevents
-   SSH session races on the same container. Different sandboxes run in
-   parallel.
+   pruning. Backend I/O (Exec/Files calls) happens *outside* the state
+   lock — only a per-sandbox mutex (held just for the duration of the
+   call) prevents concurrent shell sessions racing on the same container.
+   Different sandboxes run in parallel.
 
 2. **Crash mid-write.** State is persisted via atomic write: marshal,
    write to `<state_file>.tmp`, `os.Rename` to the final path. Atomic on
@@ -198,9 +208,13 @@ and see the same sandbox set via `list_sandboxes`.
   existing config; surface as MCP error if exceeded.
 - State file corrupt → log warning, treat as empty, continue. Orphan
   sandboxes need manual cleanup via `pixels list` + `pixels destroy`.
-- SFTP transfer of large files → `read_file` honors `max_bytes` and
-  reports `truncated: true`. `write_file` has no enforced size cap in
-  v1 (large writes fail naturally on disk).
+- Large file reads → `read_file` honors `max_bytes` and reports
+  `truncated: true` (detected by comparing stream bytes to `stat -c %s`).
+  `write_file` has no enforced size cap in v1 (large writes fail
+  naturally on disk).
+- `edit_file` race conditions → the per-sandbox mutex covers the full
+  read-modify-write so no concurrent `exec` can change the file between
+  read and write.
 - Pidfile collision on startup → exit non-zero with the live PID; do
   not start a second daemon.
 - HTTP listen-address conflict → exit non-zero with the bind error.
@@ -220,20 +234,20 @@ and see the same sandbox set via `list_sandboxes`.
 ## Testing
 
 - `internal/mcp/state_test.go` — load/save/prune, malformed JSON,
-  atomic-write crash recovery (write tmp, simulate crash, verify final
-  file unchanged).
+  atomic-write recovery (no `.tmp` left after success).
+- `internal/mcp/pidfile_test.go` — live PID rejected, stale PID
+  overwritten, Release removes the file.
 - `internal/mcp/reaper_test.go` — table-driven, mocked clock, mocked
-  truenas API (interface-based, matches the existing pattern in
-  `internal/truenas`).
-- `internal/mcp/files_test.go` — SFTP wrappers against the in-memory
-  test server in `golang.org/x/crypto/ssh`.
-- `internal/mcp/server_test.go` — tool dispatch, argument validation,
-  JSON-schema correctness.
-- `internal/mcp/http_test.go` — pidfile collision (live PID rejected,
-  stale PID overwritten), graceful shutdown removes pidfile, basic
-  end-to-end MCP request over `httptest.Server`.
-- No live TrueNAS required in CI. Manual smoke test instructions to be
-  added to `README.md` once implemented.
+  lifecycle backend (interface defined locally to keep tests minimal).
+- `internal/mcp/tools_test.go` — lifecycle handlers and edit/delete
+  semantics against an in-memory `fakeSandbox` (write-read-edit-delete
+  round-trip, edit uniqueness errors, replace_all).
+- `internal/mcp/server_test.go` — smoke test that the streamable-HTTP
+  handler mounts on the configured endpoint via `httptest.Server`.
+- `sandbox/filesexec_test.go` — `FilesViaExec` shell composition with a
+  fake `Exec` that captures Run/Output calls.
+- No live TrueNAS or Incus required in CI. Manual smoke test
+  instructions to be added to `README.md` once implemented.
 
 ## Out-of-scope / future work
 
