@@ -177,6 +177,17 @@ func Load() (*Config, error) {
 		cfg.MCP.Bases[name] = b
 	}
 
+	// Merge default bases into config: user config wins on name conflict.
+	if cfg.MCP.Bases == nil {
+		cfg.MCP.Bases = make(map[string]Base)
+	}
+	for name, b := range DefaultBases {
+		if _, ok := cfg.MCP.Bases[name]; ok {
+			continue // user config wins
+		}
+		cfg.MCP.Bases[name] = b
+	}
+
 	if err := resolveEnv(cfg); err != nil {
 		return nil, err
 	}

@@ -886,3 +886,50 @@ setup_script = "/tmp/django.sh"
 		t.Fatalf("expected valid chain to load, got: %v", err)
 	}
 }
+
+func TestDefaultBasesMergedWhenAbsentFromUserConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"dev", "python", "node"} {
+		if _, ok := cfg.MCP.Bases[name]; !ok {
+			t.Errorf("default base %q should be present after Load with no user config", name)
+		}
+	}
+}
+
+func TestUserConfigReplacesDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	_ = os.WriteFile(cfgPath, []byte(`
+[mcp.bases.python]
+parent_image = "images:debian/12"
+setup_script = "/tmp/my-python.sh"
+description = "my python"
+`), 0o644)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.MCP.Bases["python"]
+	if got.ParentImage != "images:debian/12" {
+		t.Errorf("user config did not win: ParentImage = %q", got.ParentImage)
+	}
+	if got.From != "" {
+		t.Errorf("user config did not fully replace default: From = %q (default had from='dev')", got.From)
+	}
+	if got.Description != "my python" {
+		t.Errorf("Description = %q", got.Description)
+	}
+	// Other defaults still present
+	if _, ok := cfg.MCP.Bases["dev"]; !ok {
+		t.Errorf("dev (untouched default) should still be present")
+	}
+}

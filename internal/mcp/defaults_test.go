@@ -3,18 +3,20 @@ package mcp
 import (
 	"strings"
 	"testing"
+
+	"github.com/deevus/pixels/internal/config"
 )
 
 func TestDefaultBasesPresent(t *testing.T) {
 	for _, name := range []string{"dev", "python", "node"} {
-		if _, ok := DefaultBases[name]; !ok {
+		if _, ok := config.DefaultBases[name]; !ok {
 			t.Errorf("DefaultBases missing %q", name)
 		}
 	}
 }
 
 func TestDefaultBaseScriptsLoadable(t *testing.T) {
-	for name, b := range DefaultBases {
+	for name, b := range config.DefaultBases {
 		if !strings.HasPrefix(b.SetupScript, "mcp:") {
 			t.Errorf("base %q: SetupScript = %q, want mcp: prefix", name, b.SetupScript)
 		}
@@ -33,13 +35,13 @@ func TestDefaultBaseScriptsLoadable(t *testing.T) {
 }
 
 func TestDefaultBaseChain(t *testing.T) {
-	if got := DefaultBases["dev"].ParentImage; got == "" {
+	if got := config.DefaultBases["dev"].ParentImage; got == "" {
 		t.Error("dev should have parent_image (root of the chain)")
 	}
-	if got := DefaultBases["python"].From; got != "dev" {
+	if got := config.DefaultBases["python"].From; got != "dev" {
 		t.Errorf("python.From = %q, want dev", got)
 	}
-	if got := DefaultBases["node"].From; got != "dev" {
+	if got := config.DefaultBases["node"].From; got != "dev" {
 		t.Errorf("node.From = %q, want dev", got)
 	}
 }
