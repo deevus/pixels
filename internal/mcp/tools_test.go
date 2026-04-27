@@ -93,6 +93,8 @@ func newTestTools(t *testing.T) (*Tools, *fakeSandbox) {
 		Prefix:         "px-mcp-",
 		DefaultImage:   "ubuntu/24.04",
 		ExecTimeoutMax: 10 * time.Minute,
+		Log:            NopLogger(),
+		Locks:          &SandboxLocks{},
 	}, be
 }
 

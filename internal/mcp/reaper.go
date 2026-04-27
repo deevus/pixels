@@ -2,9 +2,7 @@ package mcp
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"os"
 	"time"
 )
 
@@ -18,6 +16,7 @@ type LifecycleBackend interface {
 type Reaper struct {
 	State            *State
 	Backend          LifecycleBackend
+	Locks            *SandboxLocks // shared with Tools; TryLock to skip busy sandboxes
 	IdleStopAfter    time.Duration
 	HardDestroyAfter time.Duration
 	Log              *slog.Logger
@@ -31,33 +30,51 @@ func (r *Reaper) log() *slog.Logger {
 	return r.Log
 }
 
+func (r *Reaper) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
+}
+
 // Tick performs one reaper pass. Safe to call repeatedly.
 func (r *Reaper) Tick(ctx context.Context) {
-	if r.Now == nil {
-		r.Now = time.Now
-	}
-	now := r.Now()
-
+	now := r.now()
 	for _, sb := range r.State.Sandboxes() {
-		if now.Sub(sb.CreatedAt) > r.HardDestroyAfter {
-			if err := r.Backend.Delete(ctx, sb.Name); err != nil {
-				fmt.Fprintf(os.Stderr, "pixels mcp: destroy %s: %v\n", sb.Name, err)
-				continue
-			}
-			r.State.Remove(sb.Name)
-			continue
-		}
-		if sb.Status == "running" && now.Sub(sb.LastActivityAt) > r.IdleStopAfter {
-			if err := r.Backend.Stop(ctx, sb.Name); err != nil {
-				fmt.Fprintf(os.Stderr, "pixels mcp: stop %s: %v\n", sb.Name, err)
-				continue
-			}
-			r.State.SetStatus(sb.Name, "stopped")
-		}
+		r.tickOne(ctx, sb, now)
 	}
-
 	if err := r.State.Save(); err != nil {
-		fmt.Fprintf(os.Stderr, "pixels mcp: save state: %v\n", err)
+		r.log().Error("save state during reap", "err", err)
+	}
+}
+
+func (r *Reaper) tickOne(ctx context.Context, sb Sandbox, now time.Time) {
+	if r.Locks != nil {
+		m := r.Locks.For(sb.Name)
+		if !m.TryLock() {
+			r.log().Debug("reaper skipped busy sandbox", "name", sb.Name)
+			return
+		}
+		defer m.Unlock()
+	}
+	r.applyTTL(ctx, sb, now)
+}
+
+func (r *Reaper) applyTTL(ctx context.Context, sb Sandbox, now time.Time) {
+	if now.Sub(sb.CreatedAt) > r.HardDestroyAfter {
+		if err := r.Backend.Delete(ctx, sb.Name); err != nil {
+			r.log().Error("destroy", "name", sb.Name, "err", err)
+			return
+		}
+		r.State.Remove(sb.Name)
+		return
+	}
+	if sb.Status == "running" && now.Sub(sb.LastActivityAt) > r.IdleStopAfter {
+		if err := r.Backend.Stop(ctx, sb.Name); err != nil {
+			r.log().Error("stop", "name", sb.Name, "err", err)
+			return
+		}
+		r.State.SetStatus(sb.Name, "stopped")
 	}
 }
 

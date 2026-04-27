@@ -81,6 +81,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 
 	log := mcppkg.NewLogger(os.Stderr, mcpVerbose)
 	state.SetLogger(log)
+	locks := &mcppkg.SandboxLocks{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -92,11 +93,13 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		DefaultImage:   defaultImg,
 		ExecTimeoutMax: execMax,
 		Log:            log,
+		Locks:          locks,
 	}, cfg.MCP.EndpointPath)
 
 	reaper := &mcppkg.Reaper{
 		State:            state,
 		Backend:          sb,
+		Locks:            locks,
 		IdleStopAfter:    idle,
 		HardDestroyAfter: hard,
 		Log:              log,

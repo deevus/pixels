@@ -18,6 +18,7 @@ type ServerOpts struct {
 	DefaultImage   string
 	ExecTimeoutMax time.Duration
 	Log            *slog.Logger
+	Locks          *SandboxLocks // shared with Reaper; constructed by caller
 }
 
 // NewServer wires the MCP tool surface and returns an HTTP handler ready to mount.
@@ -26,6 +27,10 @@ func NewServer(opts ServerOpts, endpointPath string) (http.Handler, *Tools) {
 	if log == nil {
 		log = NopLogger()
 	}
+	locks := opts.Locks
+	if locks == nil {
+		locks = &SandboxLocks{}
+	}
 	tools := &Tools{
 		State:          opts.State,
 		Backend:        opts.Backend,
@@ -33,6 +38,7 @@ func NewServer(opts ServerOpts, endpointPath string) (http.Handler, *Tools) {
 		DefaultImage:   opts.DefaultImage,
 		ExecTimeoutMax: opts.ExecTimeoutMax,
 		Log:            log,
+		Locks:          locks,
 	}
 
 	srv := sdk.NewServer(&sdk.Implementation{Name: "pixels-mcp", Version: "0.1.0"}, nil)

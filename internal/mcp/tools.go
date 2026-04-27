@@ -9,7 +9,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/deevus/pixels/sandbox"
@@ -22,13 +21,8 @@ type Tools struct {
 	Prefix         string
 	DefaultImage   string
 	ExecTimeoutMax time.Duration
-	Log            *slog.Logger // not nil; defaults to NopLogger if not set
-
-	// Per-sandbox mutex map. Tool handlers acquire the lock for the duration
-	// of any call that touches the container, so concurrent ops on the same
-	// sandbox don't race.
-	mu      sync.Mutex
-	sbLocks map[string]*sync.Mutex
+	Log            *slog.Logger  // not nil; defaults to NopLogger if not set
+	Locks          *SandboxLocks // shared with Reaper; never nil after NewServer
 }
 
 func (t *Tools) log() *slog.Logger {
@@ -38,19 +32,7 @@ func (t *Tools) log() *slog.Logger {
 	return t.Log
 }
 
-func (t *Tools) sbMutex(name string) *sync.Mutex {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.sbLocks == nil {
-		t.sbLocks = make(map[string]*sync.Mutex)
-	}
-	m, ok := t.sbLocks[name]
-	if !ok {
-		m = &sync.Mutex{}
-		t.sbLocks[name] = m
-	}
-	return m
-}
+
 
 // --- Input/output types ---
 
@@ -272,7 +254,7 @@ func (t *Tools) Exec(ctx context.Context, in ExecIn) (ExecOut, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	mu := t.sbMutex(sb.Name)
+	mu := t.Locks.For(sb.Name)
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -316,7 +298,7 @@ func (t *Tools) WriteFile(ctx context.Context, in WriteFileIn) (WriteFileOut, er
 		return WriteFileOut{}, err
 	}
 	mode := parseMode(in.Mode, 0o644)
-	mu := t.sbMutex(sb.Name)
+	mu := t.Locks.For(sb.Name)
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -333,7 +315,7 @@ func (t *Tools) ReadFile(ctx context.Context, in ReadFileIn) (ReadFileOut, error
 	if err != nil {
 		return ReadFileOut{}, err
 	}
-	mu := t.sbMutex(sb.Name)
+	mu := t.Locks.For(sb.Name)
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -351,7 +333,7 @@ func (t *Tools) ListFiles(ctx context.Context, in ListFilesIn) (ListFilesOut, er
 	if err != nil {
 		return ListFilesOut{}, err
 	}
-	mu := t.sbMutex(sb.Name)
+	mu := t.Locks.For(sb.Name)
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -378,7 +360,7 @@ func (t *Tools) EditFile(ctx context.Context, in EditFileIn) (EditFileOut, error
 	if err != nil {
 		return EditFileOut{}, err
 	}
-	mu := t.sbMutex(sb.Name)
+	mu := t.Locks.For(sb.Name)
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -415,7 +397,7 @@ func (t *Tools) DeleteFile(ctx context.Context, in DeleteFileIn) (Ack, error) {
 	if err != nil {
 		return Ack{}, err
 	}
-	mu := t.sbMutex(sb.Name)
+	mu := t.Locks.For(sb.Name)
 	mu.Lock()
 	defer mu.Unlock()
 	if err := t.Backend.DeleteFile(ctx, sb.Name, in.Path); err != nil {
