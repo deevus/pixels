@@ -271,14 +271,7 @@ func (t *Tools) provisionFromImage(ctx context.Context, name string, in CreateSa
 }
 
 func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSandboxIn) {
-	baseCfg, ok := t.Cfg.MCP.Bases[in.Base]
-	if !ok {
-		t.State.MarkFailed(name, fmt.Errorf("base %q not declared in config", in.Base))
-		_ = t.persist()
-		return
-	}
-	_ = baseCfg // referenced via cfg.MCP.Bases inside BuildChain
-
+	// BuildChain validates the base is declared.
 	// Cascade build any missing links in the from-chain.
 	exists := func(container string) bool {
 		_, err := t.Backend.Get(ctx, container)

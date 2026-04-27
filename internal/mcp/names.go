@@ -16,7 +16,3 @@ func BaseName(cfg *config.Config, name string) string {
 	return prefix + name
 }
 
-// BuilderContainerName returns the fixed container name that holds the
-// snapshot for the given base. This is the name of the stopped builder
-// container that BuildBase creates and keeps alive.
-func BuilderContainerName(baseName string) string { return "px-base-builder-" + baseName }
