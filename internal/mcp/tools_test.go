@@ -160,6 +160,37 @@ func mustEventually(t *testing.T, fn func() bool) {
 	}
 }
 
+func TestListSandboxesIncludesErrorAndIP(t *testing.T) {
+	tt, _ := newTestTools(t)
+	tt.State.Add(Sandbox{
+		Name:   "fail",
+		Status: "failed",
+		Error:  "boom",
+	})
+	tt.State.Add(Sandbox{
+		Name:   "run",
+		Status: "running",
+		IP:     "10.0.0.5",
+	})
+
+	out, _ := tt.ListSandboxes(context.Background(), EmptyIn{})
+	var fail, run *SandboxView
+	for i := range out.Sandboxes {
+		if out.Sandboxes[i].Name == "fail" {
+			fail = &out.Sandboxes[i]
+		}
+		if out.Sandboxes[i].Name == "run" {
+			run = &out.Sandboxes[i]
+		}
+	}
+	if fail == nil || fail.Error != "boom" {
+		t.Errorf("expected error=boom on fail; got %+v", fail)
+	}
+	if run == nil || run.IP != "10.0.0.5" {
+		t.Errorf("expected ip=10.0.0.5 on run; got %+v", run)
+	}
+}
+
 func TestCreateSandboxReturnsImmediatelyWithProvisioning(t *testing.T) {
 	ctx := context.Background()
 	tt, fb := newTestTools(t)

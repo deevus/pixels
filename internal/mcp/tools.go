@@ -74,6 +74,9 @@ type SandboxView struct {
 	Name           string    `json:"name"`
 	Label          string    `json:"label,omitempty"`
 	Status         string    `json:"status"`
+	Error          string    `json:"error,omitempty"`
+	IP             string    `json:"ip,omitempty"`
+	Base           string    `json:"base,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 	LastActivityAt time.Time `json:"last_activity_at"`
 	IdleFor        string    `json:"idle_for"`
@@ -297,6 +300,9 @@ func (t *Tools) ListSandboxes(ctx context.Context, _ EmptyIn) (ListSandboxesOut,
 			Name:           sb.Name,
 			Label:          sb.Label,
 			Status:         sb.Status,
+			Error:          sb.Error,
+			IP:             sb.IP,
+			Base:           sb.Base,
 			CreatedAt:      sb.CreatedAt,
 			LastActivityAt: sb.LastActivityAt,
 			IdleFor:        now.Sub(sb.LastActivityAt).Round(time.Second).String(),
