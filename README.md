@@ -328,6 +328,53 @@ Create `~/.config/pixels/config.toml`:
 | `PIXELS_PROVISION_DEVTOOLS` | `provision.devtools` |
 | `PIXELS_NETWORK_EGRESS` | `network.egress` |
 
+## Using `pixels` as an MCP code-sandbox server
+
+`pixels mcp` runs a streamable-HTTP MCP server that exposes container
+lifecycle, exec, and file CRUD as MCP tools. Run it once on your
+machine, then point any number of MCP clients at it.
+
+### Start the daemon
+
+    pixels mcp
+
+By default it binds to `http://127.0.0.1:8765/mcp` and refuses to start
+if another instance is already running (PID file at
+`~/.cache/pixels/mcp.pid`).
+
+### Configure your client
+
+Claude Code MCP entry:
+
+    {
+      "mcpServers": {
+        "pixels": { "url": "http://127.0.0.1:8765/mcp" }
+      }
+    }
+
+### Tools
+
+| Tool | What it does |
+|---|---|
+| `create_sandbox` | Spin up a new ephemeral container |
+| `list_sandboxes` | List tracked sandboxes |
+| `start_sandbox` / `stop_sandbox` / `destroy_sandbox` | Lifecycle |
+| `exec` | Run a command inside a sandbox |
+| `write_file` | Create or fully overwrite a file |
+| `read_file` | Read a file (optional truncation via `max_bytes`) |
+| `edit_file` | Replace `old_string` with `new_string` (with optional `replace_all`) |
+| `delete_file` | Remove a file |
+| `list_files` | List directory contents (optionally recursive) |
+
+### Lifetimes
+
+Two TTLs apply (configurable in `[mcp]` config):
+
+- `idle_stop_after` (default 1h) — running sandbox with no recent
+  activity gets stopped.
+- `hard_destroy_after` (default 24h) — any sandbox older than this is
+  destroyed and removed from state.
+
 ## Security
 
 Container egress filtering uses nftables rules inside the container. A root process with `cap_net_admin` could bypass these rules. The `pixel` user has restricted sudo that only permits safe-apt, dpkg-query, systemctl, journalctl, and nft list.
