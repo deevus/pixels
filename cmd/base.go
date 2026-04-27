@@ -1,12 +1,15 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"path/filepath"
 	"slices"
+	"time"
 
+	"github.com/briandowns/spinner"
 	mcppkg "github.com/deevus/pixels/internal/mcp"
 	"github.com/spf13/cobra"
 )
@@ -107,12 +110,36 @@ func runBaseBuild(cmd *cobra.Command, args []string) error {
 	}
 	defer sb.Close()
 
+	stderr := cmd.ErrOrStderr()
+
+	// Spinner for non-verbose mode — shows current phase on stderr.
+	var spin *spinner.Spinner
+	if !verbose {
+		spin = spinner.New(spinner.CharSets[14], 100*time.Millisecond, spinner.WithWriter(stderr))
+	}
+	setStatus := func(msg string) {
+		if spin != nil {
+			spin.Suffix = "  " + msg
+			if !spin.Active() {
+				spin.Start()
+			}
+		}
+	}
+	stopSpinner := func() {
+		if spin != nil && spin.Active() {
+			spin.Stop()
+		}
+	}
+	defer stopSpinner()
+
 	exists := func(container string) bool {
 		_, err := sb.Get(context.Background(), container)
 		return err == nil
 	}
+
 	build := func(baseName string) error {
 		baseCfg := cfg.MCP.Bases[baseName]
+
 		// File-lock per base name across CLI vs daemon.
 		lockDir := filepath.Dir(cfg.MCPStateFile())
 		bl, err := mcppkg.AcquireBuildLock(lockDir, baseName)
@@ -120,7 +147,43 @@ func runBaseBuild(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		defer bl.Release()
-		return mcppkg.BuildBase(context.Background(), sb, cfg, baseName, baseCfg, os.Stderr)
+
+		// Cascade-build header (visible in both modes).
+		stopSpinner()
+		fmt.Fprintf(stderr, "==> Building base %s...\n", baseName)
+
+		// Choose Out writer + Progress callback per verbose mode.
+		var out io.Writer
+		var captured *bytes.Buffer
+		var progress func(string)
+		if verbose {
+			out = stderr
+			progress = func(phase string) { fmt.Fprintf(stderr, "==> %s\n", phase) }
+		} else {
+			captured = &bytes.Buffer{}
+			out = captured
+			progress = setStatus
+		}
+
+		start := time.Now()
+		err = mcppkg.BuildBase(context.Background(), sb, cfg, baseName, baseCfg, mcppkg.BuildBaseOpts{
+			Out:      out,
+			Progress: progress,
+		})
+		stopSpinner()
+		if err != nil {
+			// In non-verbose mode, dump captured script output before the error so the user
+			// can see why the script failed.
+			if captured != nil && captured.Len() > 0 {
+				fmt.Fprintln(stderr, "--- captured output ---")
+				_, _ = io.Copy(stderr, captured)
+				fmt.Fprintln(stderr, "--- end output ---")
+			}
+			return err
+		}
+		fmt.Fprintf(stderr, "Built %s in %s\n", baseName, time.Since(start).Truncate(100*time.Millisecond))
+		return nil
 	}
+
 	return mcppkg.BuildChain(context.Background(), cfg, name, exists, build)
 }

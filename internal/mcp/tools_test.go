@@ -374,7 +374,7 @@ func TestCreateSandboxWithBaseClonesFromSnapshot(t *testing.T) {
 	tt.BuildLockDir = t.TempDir()
 	tt.Builder = &Builder{}
 	tt.Builder.DoBuild = func(ctx context.Context, name string) error {
-		return BuildBase(ctx, tt.Backend, tt.Cfg, name, tt.Cfg.MCP.Bases[name], io.Discard)
+		return BuildBase(ctx, tt.Backend, tt.Cfg, name, tt.Cfg.MCP.Bases[name], BuildBaseOpts{Out: io.Discard})
 	}
 
 	// Pretend the snapshot already exists for this test.
@@ -412,7 +412,7 @@ func TestCreateSandboxSkipsBuildWhenBuilderExists(t *testing.T) {
 	tt.Builder = &Builder{
 		DoBuild: func(ctx context.Context, name string) error {
 			buildCalls++
-			return BuildBase(ctx, tt.Backend, tt.Cfg, name, tt.Cfg.MCP.Bases[name], io.Discard)
+			return BuildBase(ctx, tt.Backend, tt.Cfg, name, tt.Cfg.MCP.Bases[name], BuildBaseOpts{Out: io.Discard})
 		},
 	}
 

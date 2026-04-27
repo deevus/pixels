@@ -26,7 +26,7 @@ func TestBuildBaseFromParentImage(t *testing.T) {
 	err := BuildBase(context.Background(), be, cfg, "python", config.Base{
 		ParentImage: "images:ubuntu/24.04",
 		SetupScript: scriptPath,
-	}, &buf)
+	}, BuildBaseOpts{Out: &buf})
 	if err != nil {
 		t.Fatalf("BuildBase: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestBuildBaseFromParentBase(t *testing.T) {
 	err := BuildBase(context.Background(), be, cfg, "python", config.Base{
 		From:        "dev",
 		SetupScript: scriptPath,
-	}, &buf)
+	}, BuildBaseOpts{Out: &buf})
 	if err != nil {
 		t.Fatalf("BuildBase: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestBuildBaseEmbeddedSetupScript(t *testing.T) {
 	err := BuildBase(context.Background(), be, cfg, "dev", config.Base{
 		ParentImage: "images:ubuntu/24.04",
 		SetupScript: "mcp:bases/dev.sh",
-	}, &buf)
+	}, BuildBaseOpts{Out: &buf})
 	if err != nil {
 		t.Fatalf("BuildBase with embedded script: %v", err)
 	}
@@ -98,5 +98,54 @@ func TestBuildBaseEmbeddedSetupScript(t *testing.T) {
 	}
 	if !sawSetup {
 		t.Error("expected a bash setup-script run on the new base")
+	}
+}
+
+func TestBuildBaseProgressPhases(t *testing.T) {
+	be := newFakeSandbox()
+	cfg := &config.Config{MCP: config.MCP{BasePrefix: "px-base-"}}
+	be.containers["px-base-dev"] = sandbox.Instance{Name: "px-base-dev", Status: sandbox.StatusStopped}
+	be.snapshots["px-base-dev:initial"] = time.Now()
+
+	var phases []string
+	err := BuildBase(context.Background(), be, cfg, "python", config.Base{
+		From:        "dev",
+		SetupScript: "mcp:bases/python.sh",
+	}, BuildBaseOpts{Progress: func(p string) { phases = append(phases, p) }})
+	if err != nil {
+		t.Fatalf("BuildBase: %v", err)
+	}
+
+	want := []string{
+		"Cloning from px-base-dev",
+		"Waiting for container to be ready...",
+		"Uploading setup script...",
+		"Running setup script...",
+		"Stopping container...",
+		"Creating initial checkpoint...",
+	}
+	if len(phases) != len(want) {
+		t.Fatalf("got %d phases, want %d: %v", len(phases), len(want), phases)
+	}
+	for i, w := range want {
+		if phases[i] != w {
+			t.Errorf("phase[%d] = %q, want %q", i, phases[i], w)
+		}
+	}
+}
+
+func TestBuildBaseProgressFromImage(t *testing.T) {
+	be := newFakeSandbox()
+	cfg := &config.Config{MCP: config.MCP{BasePrefix: "px-base-"}}
+	var phases []string
+	err := BuildBase(context.Background(), be, cfg, "dev", config.Base{
+		ParentImage: "ubuntu/24.04",
+		SetupScript: "mcp:bases/dev.sh",
+	}, BuildBaseOpts{Progress: func(p string) { phases = append(phases, p) }})
+	if err != nil {
+		t.Fatalf("BuildBase: %v", err)
+	}
+	if len(phases) == 0 || phases[0] != "Creating from ubuntu/24.04" {
+		t.Errorf("first phase = %q, want %q (got phases=%v)", phases[0], "Creating from ubuntu/24.04", phases)
 	}
 }
