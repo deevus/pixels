@@ -285,7 +285,7 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 	// Ensure the snapshot exists (build if not). This blocks for the duration
 	// of the build, which may be minutes — that's fine; we're in a goroutine.
 	builder := BuilderContainerName(in.Base)
-	snapLabel := SnapshotName(in.Base)
+	snapLabel := BaseName(t.Cfg, in.Base)
 	_, err := t.Backend.Get(ctx, builder)
 	exists := false
 	switch {
@@ -335,14 +335,6 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 	t.log().Info("cloned from base", "name", name, "base", in.Base)
 }
 
-// BuilderContainerName returns the fixed container name that holds the
-// snapshot for the given base. This is the name of the stopped builder
-// container that BuildBase creates and keeps alive.
-func BuilderContainerName(baseName string) string { return "px-base-builder-" + baseName }
-
-// SnapshotName returns the snapshot label for a base, created by BuildBase
-// on the builder container.
-func SnapshotName(baseName string) string { return "px-base-" + baseName }
 
 func (t *Tools) DestroySandbox(ctx context.Context, in SandboxRef) (Ack, error) {
 	if err := t.Backend.Delete(ctx, in.Name); err != nil {

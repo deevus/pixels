@@ -22,7 +22,7 @@ import (
 //
 // On any failure it cleans up and returns the error.
 // out receives setup-script stdout/stderr for streaming to the user.
-func BuildBase(ctx context.Context, be sandbox.Sandbox, baseCfg config.Base, name string, out io.Writer) error {
+func BuildBase(ctx context.Context, be sandbox.Sandbox, cfg *config.Config, baseCfg config.Base, name string, out io.Writer) error {
 	if baseCfg.ParentImage == "" {
 		return fmt.Errorf("base %q: parent_image not set", name)
 	}
@@ -36,7 +36,7 @@ func BuildBase(ctx context.Context, be sandbox.Sandbox, baseCfg config.Base, nam
 	}
 
 	builderName := BuilderContainerName(name)
-	snapName := SnapshotName(name)
+	snapName := BaseName(cfg, name)
 	cleanup := func() {
 		fmt.Fprintf(out, "==> Cleaning up builder %s\n", builderName)
 		if err := be.Delete(context.Background(), builderName); err != nil {

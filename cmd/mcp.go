@@ -101,7 +101,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 		if !ok {
 			return fmt.Errorf("base %q not declared", name)
 		}
-		return mcppkg.BuildBase(buildCtx, sb, baseCfg, name, os.Stderr)
+		return mcppkg.BuildBase(buildCtx, sb, cfg, baseCfg, name, os.Stderr)
 	}
 
 	mux, tools := mcppkg.NewServer(mcppkg.ServerOpts{

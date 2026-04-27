@@ -289,11 +289,11 @@ func TestCreateSandboxWithBaseClonesFromSnapshot(t *testing.T) {
 	tt.BuildLockDir = t.TempDir()
 	tt.Builder = &Builder{}
 	tt.Builder.DoBuild = func(ctx context.Context, name string) error {
-		return BuildBase(ctx, tt.Backend, tt.Cfg.MCP.Bases[name], name, io.Discard)
+		return BuildBase(ctx, tt.Backend, tt.Cfg, tt.Cfg.MCP.Bases[name], name, io.Discard)
 	}
 
 	// Pretend the snapshot already exists for this test.
-	fb.snapshots[SnapshotName("python")] = "ready"
+	fb.snapshots[BaseName(tt.Cfg, "python")] = "ready"
 
 	out, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{Base: "python"})
 	if err != nil {
@@ -305,8 +305,8 @@ func TestCreateSandboxWithBaseClonesFromSnapshot(t *testing.T) {
 		return got.Status == "running"
 	})
 	// Verify CloneFrom was used with the builder container, not Create.
-	if len(fb.cloned) != 1 || fb.cloned[0].source != BuilderContainerName("python") || fb.cloned[0].label != SnapshotName("python") {
-		t.Errorf("expected CloneFrom builder %s snap %s; got %+v", BuilderContainerName("python"), SnapshotName("python"), fb.cloned)
+	if len(fb.cloned) != 1 || fb.cloned[0].source != BuilderContainerName("python") || fb.cloned[0].label != BaseName(tt.Cfg, "python") {
+		t.Errorf("expected CloneFrom builder %s snap %s; got %+v", BuilderContainerName("python"), BaseName(tt.Cfg, "python"), fb.cloned)
 	}
 }
 
@@ -327,13 +327,13 @@ func TestCreateSandboxSkipsBuildWhenBuilderExists(t *testing.T) {
 	tt.Builder = &Builder{
 		DoBuild: func(ctx context.Context, name string) error {
 			buildCalls++
-			return BuildBase(ctx, tt.Backend, tt.Cfg.MCP.Bases[name], name, io.Discard)
+			return BuildBase(ctx, tt.Backend, tt.Cfg, tt.Cfg.MCP.Bases[name], name, io.Discard)
 		},
 	}
 
 	// Arrange: builder container already exists in fake backend state (via created).
 	fb.created = append(fb.created, sandbox.CreateOpts{Name: BuilderContainerName("python")})
-	fb.snapshots[SnapshotName("python")] = "ready"
+	fb.snapshots[BaseName(tt.Cfg, "python")] = "ready"
 
 	out, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{Base: "python"})
 	if err != nil {

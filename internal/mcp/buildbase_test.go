@@ -19,7 +19,8 @@ func TestBuildBaseSequenceOfBackendCalls(t *testing.T) {
 
 	be := newFakeSandbox()
 	var buf bytes.Buffer
-	err := BuildBase(context.Background(), be, config.Base{
+	cfg := &config.Config{MCP: config.MCP{BasePrefix: DefaultBasePrefix}}
+	err := BuildBase(context.Background(), be, cfg, config.Base{
 		ParentImage: "images:ubuntu/24.04",
 		SetupScript: scriptPath,
 	}, "python", &buf)
@@ -30,8 +31,8 @@ func TestBuildBaseSequenceOfBackendCalls(t *testing.T) {
 	if got := len(be.created); got != 1 {
 		t.Errorf("expected exactly one builder container created, got %d", got)
 	}
-	if be.snapshots[SnapshotName("python")] != "ready" {
-		t.Errorf("expected snapshot %s; got snapshots=%v", SnapshotName("python"), be.snapshots)
+	if be.snapshots[BaseName(cfg, "python")] != "ready" {
+		t.Errorf("expected snapshot %s; got snapshots=%v", BaseName(cfg, "python"), be.snapshots)
 	}
 	if got := len(be.stopped); got != 1 || be.stopped[0] != BuilderContainerName("python") {
 		t.Errorf("expected builder %s stopped; got stopped=%v", BuilderContainerName("python"), be.stopped)
