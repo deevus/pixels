@@ -32,6 +32,16 @@ func (t *Tools) log() *slog.Logger {
 	return t.Log
 }
 
+// persist saves state and logs save errors. Returns the error so callers can
+// decide whether to surface it.
+func (t *Tools) persist() error {
+	if err := t.State.Save(); err != nil {
+		t.log().Error("state save failed", "err", err)
+		return err
+	}
+	return nil
+}
+
 
 
 // --- Input/output types ---
@@ -180,7 +190,12 @@ func (t *Tools) CreateSandbox(ctx context.Context, in CreateSandboxIn) (CreateSa
 		CreatedAt:      now,
 		LastActivityAt: now,
 	})
-	_ = t.State.Save()
+	if err := t.persist(); err != nil {
+		// rollback in-memory state so the next call doesn't see a ghost
+		t.State.Remove(name)
+		// note: backend container still exists; the agent should retry destroy if they care
+		return CreateSandboxOut{}, fmt.Errorf("create %s: state save failed: %w", name, err)
+	}
 	return CreateSandboxOut{Name: name, IP: ip, Status: "running"}, nil
 }
 
@@ -189,7 +204,7 @@ func (t *Tools) DestroySandbox(ctx context.Context, in SandboxRef) (Ack, error) 
 		return Ack{}, err
 	}
 	t.State.Remove(in.Name)
-	_ = t.State.Save()
+	_ = t.persist()
 	return Ack{OK: true}, nil
 }
 
@@ -198,7 +213,7 @@ func (t *Tools) StopSandbox(ctx context.Context, in SandboxRef) (Ack, error) {
 		return Ack{}, err
 	}
 	t.State.SetStatus(in.Name, "stopped")
-	_ = t.State.Save()
+	_ = t.persist()
 	return Ack{OK: true}, nil
 }
 
@@ -216,7 +231,9 @@ func (t *Tools) StartSandbox(ctx context.Context, in SandboxRef) (CreateSandboxO
 	}
 	t.State.SetStatus(in.Name, "running")
 	t.State.BumpActivity(in.Name, time.Now().UTC())
-	_ = t.State.Save()
+	if err := t.persist(); err != nil {
+		return CreateSandboxOut{}, fmt.Errorf("start %s: state save failed: %w", in.Name, err)
+	}
 	return CreateSandboxOut{Name: in.Name, IP: ip, Status: "running"}, nil
 }
 
@@ -277,7 +294,7 @@ func (t *Tools) Exec(ctx context.Context, in ExecIn) (ExecOut, error) {
 		Stderr: &stderr,
 	})
 	t.State.BumpActivity(sb.Name, time.Now().UTC())
-	_ = t.State.Save()
+	_ = t.persist()
 
 	out := ExecOut{
 		ExitCode: exit,
@@ -306,7 +323,7 @@ func (t *Tools) WriteFile(ctx context.Context, in WriteFileIn) (WriteFileOut, er
 		return WriteFileOut{}, err
 	}
 	t.State.BumpActivity(sb.Name, time.Now().UTC())
-	_ = t.State.Save()
+	_ = t.persist()
 	return WriteFileOut{OK: true, BytesWritten: len(in.Content)}, nil
 }
 
@@ -324,7 +341,7 @@ func (t *Tools) ReadFile(ctx context.Context, in ReadFileIn) (ReadFileOut, error
 		return ReadFileOut{}, err
 	}
 	t.State.BumpActivity(sb.Name, time.Now().UTC())
-	_ = t.State.Save()
+	_ = t.persist()
 	return ReadFileOut{Content: string(body), Truncated: truncated}, nil
 }
 
@@ -342,7 +359,7 @@ func (t *Tools) ListFiles(ctx context.Context, in ListFilesIn) (ListFilesOut, er
 		return ListFilesOut{}, err
 	}
 	t.State.BumpActivity(sb.Name, time.Now().UTC())
-	_ = t.State.Save()
+	_ = t.persist()
 	return ListFilesOut{Entries: entries}, nil
 }
 
@@ -388,7 +405,7 @@ func (t *Tools) EditFile(ctx context.Context, in EditFileIn) (EditFileOut, error
 		return EditFileOut{}, fmt.Errorf("write: %w", err)
 	}
 	t.State.BumpActivity(sb.Name, time.Now().UTC())
-	_ = t.State.Save()
+	_ = t.persist()
 	return EditFileOut{OK: true, Replacements: count}, nil
 }
 
@@ -404,6 +421,6 @@ func (t *Tools) DeleteFile(ctx context.Context, in DeleteFileIn) (Ack, error) {
 		return Ack{}, err
 	}
 	t.State.BumpActivity(sb.Name, time.Now().UTC())
-	_ = t.State.Save()
+	_ = t.persist()
 	return Ack{OK: true}, nil
 }

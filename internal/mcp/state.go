@@ -42,6 +42,9 @@ func (s *State) stateLog() *slog.Logger {
 // SetLogger assigns the logger after construction. Call once at startup.
 func (s *State) SetLogger(l *slog.Logger) { s.log = l }
 
+// SetPathForTest sets the state file path for testing only.
+func (s *State) SetPathForTest(p string) { s.path = p }
+
 type stateData struct {
 	Sandboxes []Sandbox `json:"sandboxes"`
 }

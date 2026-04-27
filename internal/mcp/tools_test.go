@@ -98,6 +98,20 @@ func newTestTools(t *testing.T) (*Tools, *fakeSandbox) {
 	}, be
 }
 
+func TestCreateSandboxPropagatesSaveError(t *testing.T) {
+	tt, _ := newTestTools(t)
+	// Force Save() to fail by using an unwritable path.
+	tt.State.SetPathForTest("/nonexistent/dir/state.json")
+
+	_, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+	if err == nil {
+		t.Fatal("expected CreateSandbox to surface the save error")
+	}
+	if got := len(tt.State.Sandboxes()); got != 0 {
+		t.Errorf("state should be empty after save failure; got %d", got)
+	}
+}
+
 func TestCreateSandboxAddsState(t *testing.T) {
 	tt, be := newTestTools(t)
 	out, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{Label: "test"})
