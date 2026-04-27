@@ -55,11 +55,12 @@ func NewServer(opts ServerOpts, endpointPath string) (http.Handler, *Tools) {
 
 	srv := sdk.NewServer(&sdk.Implementation{Name: "pixels-mcp", Version: "0.1.0"}, nil)
 
-	addTool(srv, "create_sandbox", "Create a new ephemeral sandbox container.", tools.CreateSandbox)
+	addTool(srv, "create_sandbox", "Create an ephemeral sandbox container. Pass `base` to clone from a pre-built base pixel (faster); pass `image` for raw Incus alias (slower).", tools.CreateSandbox)
 	addTool(srv, "destroy_sandbox", "Destroy a sandbox and its filesystem.", tools.DestroySandbox)
 	addTool(srv, "start_sandbox", "Start (resume) a stopped sandbox.", tools.StartSandbox)
 	addTool(srv, "stop_sandbox", "Stop (pause) a running sandbox.", tools.StopSandbox)
 	addTool(srv, "list_sandboxes", "List all tracked sandboxes.", tools.ListSandboxes)
+	addTool(srv, "list_bases", "List declared base pixels and their status (ready, missing, building, failed).", tools.ListBases)
 	addTool(srv, "exec", "Run a command inside a sandbox.", tools.Exec)
 	addTool(srv, "write_file", "Write a file inside a sandbox (create or full overwrite).", tools.WriteFile)
 	addTool(srv, "read_file", "Read a file from a sandbox, optionally truncated.", tools.ReadFile)

@@ -184,6 +184,41 @@ func mustEventually(t *testing.T, fn func() bool) {
 	}
 }
 
+func TestListBasesReturnsConfiguredBases(t *testing.T) {
+	tt, fb := newTestTools(t)
+	tt.Cfg = &config.Config{
+		MCP: config.MCP{
+			Bases: map[string]config.Base{
+				"python": {ParentImage: "images:ubuntu/24.04", Description: "Python 3"},
+				"node":   {ParentImage: "images:ubuntu/24.04", Description: "Node 22"},
+			},
+		},
+	}
+	tt.Builder = &Builder{}
+	fb.snapshots["px-base-python"] = "ready" // python is built; node is not
+
+	// Override SnapshotExists to check the fake snapshot map.
+	tt.SnapshotExists = func(ctx context.Context, sandboxName, snapName string) bool {
+		_, ok := fb.snapshots[snapName]
+		return ok
+	}
+
+	out, err := tt.ListBases(context.Background(), EmptyIn{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, b := range out.Bases {
+		got[b.Name] = b.Status
+	}
+	if got["python"] != "ready" {
+		t.Errorf("python status = %q, want ready", got["python"])
+	}
+	if got["node"] != "missing" {
+		t.Errorf("node status = %q, want missing", got["node"])
+	}
+}
+
 func TestListSandboxesIncludesErrorAndIP(t *testing.T) {
 	tt, _ := newTestTools(t)
 	tt.State.Add(Sandbox{

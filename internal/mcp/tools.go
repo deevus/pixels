@@ -28,9 +28,10 @@ type Tools struct {
 	Locks          *SandboxLocks // shared with Reaper; never nil after NewServer
 	DaemonCtx      context.Context // outlives any single request; provisioning goroutine inherits this
 	Cfg            *config.Config
-	Builder        *Builder
-	BuildLockDir   string
-	provisionWG    sync.WaitGroup // test affordance: tracks in-flight provisioning goroutines
+	Builder         *Builder
+	BuildLockDir    string
+	SnapshotExists  SnapshotExistsFn // defaults to pessimistic (always false); override in tests
+	provisionWG     sync.WaitGroup // test affordance: tracks in-flight provisioning goroutines
 }
 
 func (t *Tools) log() *slog.Logger {
@@ -278,7 +279,8 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 
 	// Ensure the snapshot exists (build if not). This blocks for the duration
 	// of the build, which may be minutes — that's fine; we're in a goroutine.
-	if !t.snapshotExists(ctx, name, BuildBaseSnapshotName(in.Base)) {
+	exists := t.SnapshotExists != nil && t.SnapshotExists(ctx, name, BuildBaseSnapshotName(in.Base))
+	if !exists {
 		if err := t.Builder.Build(ctx, in.Base); err != nil {
 			t.State.MarkFailed(name, fmt.Errorf("build base %s: %w", in.Base, err))
 			_ = t.persist()
@@ -311,16 +313,9 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 	t.log().Info("cloned from base", "name", name, "base", in.Base)
 }
 
-// snapshotExists returns true if the named base snapshot already exists on the
-// backend. For v1 this uses a pessimistic strategy: it always returns false,
-// deferring to the Builder which is idempotent (BuildBase will fail at
-// CreateSnapshot if it already exists, and the Builder's failure cache avoids
-// repeated failed attempts).
-//
-// TODO: add Backend.SnapshotExists to the interface for an O(1) check.
-func (t *Tools) snapshotExists(ctx context.Context, sandboxName, snapName string) bool {
-	return false
-}
+// SnapshotExistsFn is the type for snapshot existence checking. Tests can
+// override Tools.SnapshotExists to avoid needing a real backend.
+type SnapshotExistsFn func(ctx context.Context, sandboxName, snapName string) bool
 
 func (t *Tools) DestroySandbox(ctx context.Context, in SandboxRef) (Ack, error) {
 	if err := t.Backend.Delete(ctx, in.Name); err != nil {
@@ -381,6 +376,56 @@ func (t *Tools) ListSandboxes(ctx context.Context, _ EmptyIn) (ListSandboxesOut,
 		})
 	}
 	return ListSandboxesOut{Sandboxes: out}, nil
+}
+
+// --- ListBases handler ---
+
+type ListBasesOut struct {
+	Bases []BaseView `json:"bases"`
+}
+
+type BaseView struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	ParentImage string `json:"parent_image"`
+	Status      string `json:"status"` // "ready" | "missing" | "building" | "failed"
+	Error       string `json:"error,omitempty"`
+}
+
+func (t *Tools) ListBases(ctx context.Context, _ EmptyIn) (ListBasesOut, error) {
+	if t.Cfg == nil {
+		return ListBasesOut{}, nil
+	}
+	out := make([]BaseView, 0, len(t.Cfg.MCP.Bases))
+	for name, b := range t.Cfg.MCP.Bases {
+		view := BaseView{
+			Name:        name,
+			Description: b.Description,
+			ParentImage: b.ParentImage,
+		}
+
+		// In-flight or recently failed?
+		if t.Builder != nil {
+			if status, err := t.Builder.Status(name); status != "" {
+				view.Status = status
+				if err != nil {
+					view.Error = err.Error()
+				}
+				out = append(out, view)
+				continue
+			}
+		}
+
+		// Snapshot present or absent?
+		exists := t.SnapshotExists != nil && t.SnapshotExists(ctx, name, BuildBaseSnapshotName(name))
+		if exists {
+			view.Status = "ready"
+		} else {
+			view.Status = "missing"
+		}
+		out = append(out, view)
+	}
+	return ListBasesOut{Bases: out}, nil
 }
 
 // --- Exec handler ---
