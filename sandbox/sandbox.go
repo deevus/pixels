@@ -6,6 +6,7 @@ package sandbox
 import (
 	"context"
 	"io"
+	"os"
 	"time"
 )
 
@@ -44,10 +45,27 @@ type NetworkPolicy interface {
 	GetPolicy(ctx context.Context, name string) (*Policy, error)
 }
 
+// FileEntry describes one entry in a ListFiles result.
+type FileEntry struct {
+	Path  string      `json:"path"`
+	Size  int64       `json:"size"`
+	Mode  os.FileMode `json:"mode"`
+	IsDir bool        `json:"is_dir"`
+}
+
+// Files provides byte-level file I/O into a sandbox instance.
+type Files interface {
+	WriteFile(ctx context.Context, name, path string, content []byte, mode os.FileMode) error
+	ReadFile(ctx context.Context, name, path string, maxBytes int64) (content []byte, truncated bool, err error)
+	ListFiles(ctx context.Context, name, path string, recursive bool) ([]FileEntry, error)
+	DeleteFile(ctx context.Context, name, path string) error
+}
+
 // Sandbox composes all sandbox capabilities into a single interface.
 type Sandbox interface {
 	Backend
 	Exec
+	Files
 	NetworkPolicy
 }
 
