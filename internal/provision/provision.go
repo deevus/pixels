@@ -18,7 +18,7 @@ import (
 )
 
 // zmxVersion is the zmx release to install inside containers.
-const zmxVersion = "0.4.2-pre"
+const zmxVersion = "0.5.0"
 
 // Step defines a named provisioning task to run via zmx.
 type Step struct {
