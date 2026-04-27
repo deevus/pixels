@@ -381,13 +381,22 @@ Three bases ship out of the box:
 - `python` — `dev` + python3, pip, pipx, venv
 - `node` — `dev` + Node 22 LTS, npm
 
-Add your own in config:
+Add your own in config. Each base must declare exactly one of `parent_image` or `from`:
 
 ```toml
 [mcp.bases.rust]
-parent_image = "images:ubuntu/24.04"      # or `from = "dev"`
+parent_image = "images:ubuntu/24.04"
 setup_script = "~/.config/pixels/bases/rust.sh"
 description  = "Rust toolchain"
+```
+
+Or build on top of another base:
+
+```toml
+[mcp.bases.rust-dev]
+from = "dev"
+setup_script = "~/.config/pixels/bases/rust-dev.sh"
+description  = "Rust toolchain + dev tools"
 ```
 
 Bases form a DAG via `from`. Cycle / missing-dep / both-set / neither-set
@@ -405,6 +414,12 @@ pixels checkpoint create px-base-python
 The next `create_sandbox(base="python")` call clones from the new
 checkpoint. Existing sandboxes are unaffected (independent containers).
 
+**Checkpoint-advances-clone-source.** Any `pixels checkpoint create px-base-X`
+immediately advances the snapshot that future sandboxes clone from. If you take
+a *safety* checkpoint before mutating, new sandboxes will clone from that
+pre-mutation state until you take another checkpoint *after* the changes. Always
+re-checkpoint after mutating to ensure new clones pick up your changes.
+
 **Mutation-propagation gotcha.** Changes to `dev` do NOT auto-flow into
 `python` or `node`. Both are independent containers built when `dev` was
 in its prior state. To propagate: `pixels destroy px-base-python &&
@@ -418,6 +433,19 @@ CLI:
 | `pixels base build <name>` | Build the base; cascade-builds missing deps |
 | `pixels destroy px-base-<name>` | Delete a base (existing CLI) |
 | `pixels checkpoint create px-base-<name>` | Publish a new state for clones |
+
+Example `pixels base list` output:
+
+```
+$ pixels base list
+NAME    FROM/IMAGE              STATUS  LAST_CHECKPOINT       DESCRIPTION
+dev     images:ubuntu/24.04     ready   2026-04-27 12:30:00   Ubuntu 24.04 + git, curl, vim, ...
+node    dev                     missing                       dev + Node 22 LTS, npm
+python  dev                     ready   2026-04-27 12:35:00   dev + python3, pip, pipx, venv
+```
+
+**Force rebuild.** There is no `pixels base rebuild` command. To force a full
+rebuild of a base, run `pixels destroy px-base-<name> && pixels base build <name>`.
 
 ### Provisioning is async
 
