@@ -414,8 +414,9 @@ func (i *Incus) ListSnapshots(ctx context.Context, name string) ([]sandbox.Snaps
 	result := make([]sandbox.Snapshot, len(snaps))
 	for idx, s := range snaps {
 		result[idx] = sandbox.Snapshot{
-			Label: s.Name,
-			Size:  s.Size,
+			Label:     s.Name,
+			Size:      s.Size,
+			CreatedAt: s.CreatedAt,
 		}
 	}
 	return result, nil

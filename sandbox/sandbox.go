@@ -100,8 +100,9 @@ type Instance struct {
 
 // Snapshot is a point-in-time capture of an instance's filesystem.
 type Snapshot struct {
-	Label string
-	Size  int64
+	Label     string
+	Size      int64
+	CreatedAt time.Time
 }
 
 // CreateOpts holds parameters for creating a new sandbox instance.

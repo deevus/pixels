@@ -263,8 +263,9 @@ func (t *TrueNAS) ListSnapshots(ctx context.Context, name string) ([]sandbox.Sna
 	result := make([]sandbox.Snapshot, len(snaps))
 	for i, s := range snaps {
 		result[i] = sandbox.Snapshot{
-			Label: s.SnapshotName,
-			Size:  s.Referenced,
+			Label:     s.SnapshotName,
+			Size:      s.Referenced,
+			CreatedAt: time.Time{}, // truenas-go API doesn't expose ZFS creation timestamp
 		}
 	}
 	return result, nil
