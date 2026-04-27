@@ -157,8 +157,6 @@ func parseMode(s string, fallback os.FileMode) os.FileMode {
 	if s == "" {
 		return fallback
 	}
-	s = strings.TrimPrefix(s, "0o")
-	s = strings.TrimPrefix(s, "0")
 	n, err := strconv.ParseUint(s, 8, 32)
 	if err != nil {
 		return fallback

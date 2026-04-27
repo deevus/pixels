@@ -22,6 +22,8 @@ type ServerOpts struct {
 }
 
 // NewServer wires the MCP tool surface and returns an HTTP handler ready to mount.
+// The second return value (*Tools) is a test affordance — it gives tests access
+// to the handler functions directly without an HTTP round-trip.
 func NewServer(opts ServerOpts, endpointPath string) (http.Handler, *Tools) {
 	log := opts.Log
 	if log == nil {

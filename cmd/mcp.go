@@ -3,10 +3,10 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -144,5 +144,15 @@ func pickStr(override, fallback string) string {
 }
 
 func isLoopback(addr string) bool {
-	return strings.HasPrefix(addr, "127.") || strings.HasPrefix(addr, "localhost")
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	if host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
