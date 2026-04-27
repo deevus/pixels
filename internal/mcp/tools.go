@@ -396,11 +396,13 @@ type ListBasesOut struct {
 }
 
 type BaseView struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	ParentImage string `json:"parent_image"`
-	Status      string `json:"status"` // "ready" | "missing" | "building" | "failed"
-	Error       string `json:"error,omitempty"`
+	Name           string     `json:"name"`
+	Description    string     `json:"description,omitempty"`
+	ParentImage    string     `json:"parent_image,omitempty"`
+	From           string     `json:"from,omitempty"`
+	Status         string     `json:"status"` // "ready" | "missing" | "building" | "failed"
+	Error          string     `json:"error,omitempty"`
+	LastCheckpoint *time.Time `json:"last_checkpoint,omitempty"`
 }
 
 func (t *Tools) ListBases(ctx context.Context, _ EmptyIn) (ListBasesOut, error) {
@@ -409,42 +411,44 @@ func (t *Tools) ListBases(ctx context.Context, _ EmptyIn) (ListBasesOut, error) 
 	}
 	out := make([]BaseView, 0, len(t.Cfg.MCP.Bases))
 	for name, b := range t.Cfg.MCP.Bases {
-		view := BaseView{
+		v := BaseView{
 			Name:        name,
 			Description: b.Description,
 			ParentImage: b.ParentImage,
+			From:        b.From,
 		}
 
 		// In-flight or recently failed?
 		if t.Builder != nil {
 			if status, err := t.Builder.Status(name); status != "" {
-				view.Status = status
+				v.Status = status
 				if err != nil {
-					view.Error = err.Error()
+					v.Error = err.Error()
 				}
-				out = append(out, view)
+				out = append(out, v)
 				continue
 			}
 		}
 
-		// Snapshot present or absent?
-		_, err := t.Backend.Get(ctx, BaseName(t.Cfg, name))
-		exists := false
-		switch {
-		case err == nil:
-			exists = true
-		case errors.Is(err, sandbox.ErrNotFound):
-			// genuinely missing — OK
-		default:
-			// fatal: log and mark as missing (best-effort)
-			t.log().Warn("failed to check base container", "base", name, "err", err)
+		// Container existence + checkpoint timestamp.
+		container := BaseName(t.Cfg, name)
+		if _, err := t.Backend.Get(ctx, container); err != nil {
+			if errors.Is(err, sandbox.ErrNotFound) {
+				v.Status = "missing"
+				out = append(out, v)
+				continue
+			}
+			v.Status = "failed"
+			v.Error = err.Error()
+			out = append(out, v)
+			continue
 		}
-		if exists {
-			view.Status = "ready"
-		} else {
-			view.Status = "missing"
+		v.Status = "ready"
+		if latest, ok, err := LatestCheckpointFor(ctx, t.Backend, container); err == nil && ok {
+			t := latest.CreatedAt
+			v.LastCheckpoint = &t
 		}
-		out = append(out, view)
+		out = append(out, v)
 	}
 	return ListBasesOut{Bases: out}, nil
 }

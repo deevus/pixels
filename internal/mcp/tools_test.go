@@ -74,6 +74,10 @@ func (f *fakeSandbox) Create(ctx context.Context, o sandbox.CreateOpts) (*sandbo
 func (f *fakeSandbox) Get(ctx context.Context, n string) (*sandbox.Instance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// Check if this container is in the containers map (for test setup).
+	if inst, ok := f.containers[n]; ok {
+		return &inst, nil
+	}
 	// Check if this container was created.
 	for _, c := range f.created {
 		if c.Name == n {
@@ -258,6 +262,58 @@ func TestListBasesReturnsConfiguredBases(t *testing.T) {
 	}
 	if got["node"] != "missing" {
 		t.Errorf("node status = %q, want missing", got["node"])
+	}
+}
+
+func TestListBasesIncludesFromAndLastCheckpoint(t *testing.T) {
+	tt, fb := newTestTools(t)
+	tt.Cfg = &config.Config{
+		MCP: config.MCP{
+			BasePrefix: "px-base-",
+			Bases: map[string]config.Base{
+				"dev":    {ParentImage: "images:ubuntu/24.04", Description: "dev"},
+				"python": {From: "dev", Description: "python"},
+			},
+		},
+	}
+
+	now := time.Date(2026, 4, 27, 12, 0, 0, 0, time.UTC)
+	fb.containers = map[string]sandbox.Instance{
+		"px-base-dev":    {Name: "px-base-dev", Status: sandbox.StatusStopped},
+		"px-base-python": {Name: "px-base-python", Status: sandbox.StatusStopped},
+	}
+	fb.snapshots = map[string]interface{}{
+		"px-base-dev:initial":     now.Add(-2 * time.Hour),
+		"px-base-python:initial":  now.Add(-1 * time.Hour),
+		"px-base-python:custom":   now,
+	}
+
+	out, err := tt.ListBases(context.Background(), EmptyIn{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]BaseView{}
+	for _, b := range out.Bases {
+		byName[b.Name] = b
+	}
+
+	py := byName["python"]
+	if py.From != "dev" {
+		t.Errorf("python.From = %q, want dev", py.From)
+	}
+	if py.LastCheckpoint == nil || !py.LastCheckpoint.Equal(now) {
+		t.Errorf("python.LastCheckpoint = %v, want %v", py.LastCheckpoint, now)
+	}
+	if py.Status != "ready" {
+		t.Errorf("python.Status = %q, want ready", py.Status)
+	}
+
+	dev := byName["dev"]
+	if dev.From != "" {
+		t.Errorf("dev.From should be empty, got %q", dev.From)
+	}
+	if dev.ParentImage != "images:ubuntu/24.04" {
+		t.Errorf("dev.ParentImage = %q", dev.ParentImage)
 	}
 }
 
