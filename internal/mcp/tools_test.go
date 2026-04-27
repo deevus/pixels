@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ type fakeSandbox struct {
 	stopped []string
 	started []string
 	files   map[string][]byte
+	runHook func(name string, opts sandbox.ExecOpts) (int, error)
 }
 
 func newFakeSandbox() *fakeSandbox { return &fakeSandbox{files: make(map[string][]byte)} }
@@ -40,6 +42,9 @@ func (f *fakeSandbox) DeleteSnapshot(ctx context.Context, n, l string) error    
 func (f *fakeSandbox) RestoreSnapshot(ctx context.Context, n, l string) error   { return nil }
 func (f *fakeSandbox) CloneFrom(ctx context.Context, src, lbl, nn string) error { return nil }
 func (f *fakeSandbox) Run(ctx context.Context, n string, o sandbox.ExecOpts) (int, error) {
+	if f.runHook != nil {
+		return f.runHook(n, o)
+	}
 	return 0, nil
 }
 func (f *fakeSandbox) Output(ctx context.Context, n string, c []string) ([]byte, error) {
@@ -123,6 +128,68 @@ func TestCreateSandboxPropagatesSaveError(t *testing.T) {
 	}
 	if got := len(tt.State.Sandboxes()); got != 0 {
 		t.Errorf("state should be empty after save failure; got %d", got)
+	}
+}
+
+func TestExecAppliesCwd(t *testing.T) {
+	tt, fb := newTestTools(t)
+	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+
+	var capturedCmd []string
+	fb.runHook = func(name string, opts sandbox.ExecOpts) (int, error) {
+		capturedCmd = opts.Cmd
+		return 0, nil
+	}
+
+	_, err := tt.Exec(context.Background(), ExecIn{
+		Name:    out.Name,
+		Command: []string{"pwd"},
+		Cwd:     "/tmp",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"env", "-C", "/tmp", "--", "pwd"}
+	if !reflect.DeepEqual(capturedCmd, want) {
+		t.Errorf("exec argv = %v, want %v", capturedCmd, want)
+	}
+}
+
+func TestExecAppliesEnv(t *testing.T) {
+	tt, fb := newTestTools(t)
+	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+
+	var capturedCmd []string
+	fb.runHook = func(name string, opts sandbox.ExecOpts) (int, error) {
+		capturedCmd = opts.Cmd
+		return 0, nil
+	}
+
+	_, err := tt.Exec(context.Background(), ExecIn{
+		Name:    out.Name,
+		Command: []string{"sh", "-c", "echo $X"},
+		Env:     map[string]string{"X": "hello"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got, want := capturedCmd[0], "env"; got != want {
+		t.Errorf("argv[0] = %q, want %q", got, want)
+	}
+	// Assert "X=hello" is somewhere in argv before "--".
+	foundX := false
+	for _, a := range capturedCmd {
+		if a == "--" {
+			break
+		}
+		if a == "X=hello" {
+			foundX = true
+		}
+	}
+	if !foundX {
+		t.Errorf("env var X=hello missing from argv: %v", capturedCmd)
 	}
 }
 

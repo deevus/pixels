@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -276,21 +277,26 @@ func (t *Tools) Exec(ctx context.Context, in ExecIn) (ExecOut, error) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	cmd := in.Command
+	// Wrap the command in `env [-C cwd] [KEY=val ...] -- <command>` so cwd and
+	// env take effect regardless of how the backend handles ExecOpts.Env.
+	prefix := []string{"env"}
 	if in.Cwd != "" {
-		cmd = []string{"sh", "-c", "cd \"$1\" && shift && exec \"$@\"", "_", in.Cwd}
-		cmd = append(cmd, in.Command...)
+		prefix = append(prefix, "-C", in.Cwd)
 	}
-
-	envSlice := make([]string, 0, len(in.Env))
-	for k, v := range in.Env {
-		envSlice = append(envSlice, k+"="+v)
+	keys := make([]string, 0, len(in.Env))
+	for k := range in.Env {
+		keys = append(keys, k)
 	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		prefix = append(prefix, k+"="+in.Env[k])
+	}
+	prefix = append(prefix, "--")
+	cmd := append(prefix, in.Command...)
 
 	var stdout, stderr strings.Builder
 	exit, err := t.Backend.Run(ctx, sb.Name, sandbox.ExecOpts{
 		Cmd:    cmd,
-		Env:    envSlice,
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
