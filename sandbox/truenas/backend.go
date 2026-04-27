@@ -154,10 +154,10 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 func (t *TrueNAS) Get(ctx context.Context, name string) (*sandbox.Instance, error) {
 	inst, err := t.client.Virt.GetInstance(ctx, prefixed(name))
 	if err != nil {
-		return nil, fmt.Errorf("getting %s: %w", name, err)
+		return nil, sandbox.WrapNotFound(fmt.Errorf("getting %s: %w", name, err))
 	}
 	if inst == nil {
-		return nil, fmt.Errorf("instance %q not found", name)
+		return nil, sandbox.WrapNotFound(fmt.Errorf("instance %q not found", name))
 	}
 	return toInstance(inst), nil
 }

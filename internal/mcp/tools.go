@@ -287,10 +287,17 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 	builder := BuilderContainerName(in.Base)
 	snapLabel := SnapshotName(in.Base)
 	_, err := t.Backend.Get(ctx, builder)
-	exists := err == nil
-	if err != nil && !errors.Is(sandbox.WrapNotFound(err), sandbox.ErrNotFound) {
-		t.log().Warn("failed to check builder container", "base", in.Base, "err", err)
-		exists = false
+	exists := false
+	switch {
+	case err == nil:
+		exists = true
+	case errors.Is(err, sandbox.ErrNotFound):
+		// genuinely missing — build proceeds
+	default:
+		// fatal: propagate, do not silently rebuild
+		t.State.MarkFailed(name, fmt.Errorf("check existing base container %q: %w", builder, err))
+		_ = t.persist()
+		return
 	}
 	_ = snapLabel // TODO: will be used in Task 9 for checkpoint listing
 	if !exists {
@@ -438,10 +445,15 @@ func (t *Tools) ListBases(ctx context.Context, _ EmptyIn) (ListBasesOut, error) 
 
 		// Snapshot present or absent?
 		_, err := t.Backend.Get(ctx, BuilderContainerName(name))
-		exists := err == nil
-		if err != nil && !errors.Is(sandbox.WrapNotFound(err), sandbox.ErrNotFound) {
+		exists := false
+		switch {
+		case err == nil:
+			exists = true
+		case errors.Is(err, sandbox.ErrNotFound):
+			// genuinely missing — OK
+		default:
+			// fatal: log and mark as missing (best-effort)
 			t.log().Warn("failed to check builder container", "base", name, "err", err)
-			exists = false
 		}
 		if exists {
 			view.Status = "ready"

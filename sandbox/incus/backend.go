@@ -292,7 +292,7 @@ func (i *Incus) Get(ctx context.Context, name string) (*sandbox.Instance, error)
 	full := prefixed(name)
 	inst, _, err := i.server.GetInstance(full)
 	if err != nil {
-		return nil, fmt.Errorf("getting %s: %w", name, err)
+		return nil, sandbox.WrapNotFound(fmt.Errorf("getting %s: %w", name, err))
 	}
 
 	state, _, err := i.server.GetInstanceState(full)

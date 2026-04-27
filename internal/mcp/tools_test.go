@@ -310,6 +310,46 @@ func TestCreateSandboxWithBaseClonesFromSnapshot(t *testing.T) {
 	}
 }
 
+func TestCreateSandboxSkipsBuildWhenBuilderExists(t *testing.T) {
+	tt, fb := newTestTools(t)
+	tt.Cfg = &config.Config{
+		MCP: config.MCP{
+			Bases: map[string]config.Base{
+				"python": {
+					ParentImage: "images:ubuntu/24.04",
+					SetupScript: writeTempScript(t, "#!/bin/bash\necho hi\n"),
+				},
+			},
+		},
+	}
+	tt.BuildLockDir = t.TempDir()
+	var buildCalls int
+	tt.Builder = &Builder{
+		DoBuild: func(ctx context.Context, name string) error {
+			buildCalls++
+			return BuildBase(ctx, tt.Backend, tt.Cfg.MCP.Bases[name], name, io.Discard)
+		},
+	}
+
+	// Arrange: builder container already exists in fake backend state (via created).
+	fb.created = append(fb.created, sandbox.CreateOpts{Name: BuilderContainerName("python")})
+	fb.snapshots[SnapshotName("python")] = "ready"
+
+	out, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{Base: "python"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Wait for provisioning to flip to running.
+	mustEventually(t, func() bool {
+		got, _ := tt.State.Get(out.Name)
+		return got.Status == "running"
+	})
+	// Assert Builder.Build was NOT called (= 0).
+	if buildCalls != 0 {
+		t.Errorf("Builder.Build called %d times; expected 0 (should skip when builder exists)", buildCalls)
+	}
+}
+
 func TestCreateSandboxReturnsImmediatelyWithProvisioning(t *testing.T) {
 	ctx := context.Background()
 	tt, fb := newTestTools(t)
