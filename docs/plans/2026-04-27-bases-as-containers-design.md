@@ -1,7 +1,7 @@
 # Bases as Containers — Design
 
 **Date:** 2026-04-27
-**Status:** Design
+**Status:** Implemented
 **Topic:** Replace the snapshot-based base-pixel lifecycle with a container-as-base model. Ship embedded defaults so first-run is zero-config. Support base-from-base inheritance for shared layers (e.g. `python` extends `dev`).
 
 ## Problem

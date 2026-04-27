@@ -372,28 +372,52 @@ Claude Code MCP entry:
 
 ### Base pixels
 
-Bases are pre-built ZFS snapshots that `create_sandbox(base="X")` clones
-from. Cloning is sub-5s; building from scratch takes minutes.
+A base is a container that sandboxes clone from. Bases are declared in
+config (or shipped as defaults) and built on demand.
 
-Configure in `~/.config/pixels/config.toml`:
+Three bases ship out of the box:
+
+- `dev` — Ubuntu 24.04 + git, curl, wget, jq, vim, build-essential
+- `python` — `dev` + python3, pip, pipx, venv
+- `node` — `dev` + Node 22 LTS, npm
+
+Add your own in config:
 
 ```toml
-[mcp.bases.python]
-parent_image = "images:ubuntu/24.04"
-setup_script = "~/.config/pixels/bases/python.sh"
-description = "Ubuntu 24.04 + python3, pip, pipx"
+[mcp.bases.rust]
+parent_image = "images:ubuntu/24.04"      # or `from = "dev"`
+setup_script = "~/.config/pixels/bases/rust.sh"
+description  = "Rust toolchain"
 ```
 
-The `setup_script` is a regular shell script run as root during base
-build. Pre-warm a base with:
+Bases form a DAG via `from`. Cycle / missing-dep / both-set / neither-set
+are rejected at config load.
 
-```
-pixels mcp build-base python
+Customise a base by mutating its container:
+
+```bash
+pixels start px-base-python
+pixels exec px-base-python -- apt install vim
+pixels stop px-base-python
+pixels checkpoint create px-base-python
 ```
 
-Or just call `create_sandbox(base="python")` from an agent — the daemon
-will build the base in the background on first use. The `list_bases`
-MCP tool shows status (`ready` / `missing` / `building` / `failed`).
+The next `create_sandbox(base="python")` call clones from the new
+checkpoint. Existing sandboxes are unaffected (independent containers).
+
+**Mutation-propagation gotcha.** Changes to `dev` do NOT auto-flow into
+`python` or `node`. Both are independent containers built when `dev` was
+in its prior state. To propagate: `pixels destroy px-base-python &&
+pixels base build python`. Same semantics as Docker layered images.
+
+CLI:
+
+| Command | Action |
+|---|---|
+| `pixels base list` | Show declared bases + status |
+| `pixels base build <name>` | Build the base; cascade-builds missing deps |
+| `pixels destroy px-base-<name>` | Delete a base (existing CLI) |
+| `pixels checkpoint create px-base-<name>` | Publish a new state for clones |
 
 ### Provisioning is async
 
