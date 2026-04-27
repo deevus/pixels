@@ -26,6 +26,9 @@ func init() {
 type Incus struct {
 	server incusclient.InstanceServer
 	cfg    *incusCfg
+
+	// Embedded helper provides WriteFile/ReadFile/ListFiles/DeleteFile via Run.
+	sandbox.FilesViaExec
 }
 
 // New creates an Incus sandbox backend from a flat config map.
@@ -44,10 +47,12 @@ func New(cfg map[string]string) (*Incus, error) {
 		server = server.UseProject(c.project)
 	}
 
-	return &Incus{
+	i := &Incus{
 		server: server,
 		cfg:    c,
-	}, nil
+	}
+	i.FilesViaExec = sandbox.FilesViaExec{Exec: i}
+	return i, nil
 }
 
 // connect establishes a connection to the Incus daemon.
