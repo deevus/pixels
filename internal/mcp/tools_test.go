@@ -331,9 +331,9 @@ func TestCreateSandboxWithBaseClonesFromSnapshot(t *testing.T) {
 		got, _ := tt.State.Get(out.Name)
 		return got.Status == "running"
 	})
-	// Verify CloneFrom was used with the builder container, not Create.
-	if len(fb.cloned) != 1 || fb.cloned[0].source != BuilderContainerName("python") || fb.cloned[0].label != BaseName(tt.Cfg, "python") {
-		t.Errorf("expected CloneFrom builder %s snap %s; got %+v", BuilderContainerName("python"), BaseName(tt.Cfg, "python"), fb.cloned)
+	// Verify CloneFrom was used with the base container.
+	if len(fb.cloned) != 1 || fb.cloned[0].source != BaseName(tt.Cfg, "python") || fb.cloned[0].label != InitialCheckpointLabel {
+		t.Errorf("expected CloneFrom base %s snap %s; got %+v", BaseName(tt.Cfg, "python"), InitialCheckpointLabel, fb.cloned)
 	}
 }
 
@@ -358,8 +358,8 @@ func TestCreateSandboxSkipsBuildWhenBuilderExists(t *testing.T) {
 		},
 	}
 
-	// Arrange: builder container already exists in fake backend state (via created).
-	fb.created = append(fb.created, sandbox.CreateOpts{Name: BuilderContainerName("python")})
+	// Arrange: base container already exists in fake backend state (via created).
+	fb.created = append(fb.created, sandbox.CreateOpts{Name: BaseName(tt.Cfg, "python")})
 	fb.snapshots[BaseName(tt.Cfg, "python")+":"+InitialCheckpointLabel] = time.Now()
 
 	out, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{Base: "python"})
@@ -371,9 +371,9 @@ func TestCreateSandboxSkipsBuildWhenBuilderExists(t *testing.T) {
 		got, _ := tt.State.Get(out.Name)
 		return got.Status == "running"
 	})
-	// Assert Builder.Build was NOT called (= 0).
+	// Assert Builder.Build was NOT called (= 0) since base already exists.
 	if buildCalls != 0 {
-		t.Errorf("Builder.Build called %d times; expected 0 (should skip when builder exists)", buildCalls)
+		t.Errorf("Builder.Build called %d times; expected 0 (should skip when base exists)", buildCalls)
 	}
 }
 

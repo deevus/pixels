@@ -271,53 +271,48 @@ func (t *Tools) provisionFromImage(ctx context.Context, name string, in CreateSa
 }
 
 func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSandboxIn) {
-	if t.Cfg == nil {
-		t.State.MarkFailed(name, fmt.Errorf("config not loaded; base provisioning unavailable"))
-		_ = t.persist()
-		return
-	}
-	if _, ok := t.Cfg.MCP.Bases[in.Base]; !ok {
+	baseCfg, ok := t.Cfg.MCP.Bases[in.Base]
+	if !ok {
 		t.State.MarkFailed(name, fmt.Errorf("base %q not declared in config", in.Base))
 		_ = t.persist()
 		return
 	}
+	_ = baseCfg // referenced via cfg.MCP.Bases inside BuildChain
 
-	// Ensure the snapshot exists (build if not). This blocks for the duration
-	// of the build, which may be minutes — that's fine; we're in a goroutine.
-	builder := BuilderContainerName(in.Base)
-	snapLabel := BaseName(t.Cfg, in.Base)
-	_, err := t.Backend.Get(ctx, builder)
-	exists := false
-	switch {
-	case err == nil:
-		exists = true
-	case errors.Is(err, sandbox.ErrNotFound):
-		// genuinely missing — build proceeds
-	default:
-		// fatal: propagate, do not silently rebuild
-		t.State.MarkFailed(name, fmt.Errorf("check existing base container %q: %w", builder, err))
+	// Cascade build any missing links in the from-chain.
+	exists := func(container string) bool {
+		_, err := t.Backend.Get(ctx, container)
+		return err == nil
+	}
+	build := func(baseName string) error {
+		return t.Builder.Build(ctx, baseName)
+	}
+	if err := BuildChain(ctx, t.Cfg, in.Base, exists, build); err != nil {
+		t.State.MarkFailed(name, err)
 		_ = t.persist()
 		return
 	}
-	_ = snapLabel // TODO: will be used in Task 9 for checkpoint listing
-	if !exists {
-		if err := t.Builder.Build(ctx, in.Base); err != nil {
-			t.State.MarkFailed(name, fmt.Errorf("build base %s: %w", in.Base, err))
-			_ = t.persist()
-			return
-		}
-		// Re-check state: a destroy may have happened during the build.
-		if _, ok := t.State.Get(name); !ok {
-			return
-		}
+
+	// All chain links are present. Look up the latest checkpoint on the target base.
+	target := BaseName(t.Cfg, in.Base)
+	latest, ok2, err := LatestCheckpointFor(ctx, t.Backend, target)
+	if err != nil {
+		t.State.MarkFailed(name, fmt.Errorf("list checkpoints on %s: %w", target, err))
+		_ = t.persist()
+		return
+	}
+	if !ok2 {
+		t.State.MarkFailed(name, fmt.Errorf("base %s has no checkpoints; run `pixels checkpoint create %s`", in.Base, target))
+		_ = t.persist()
+		return
 	}
 
-	if err := t.Backend.CloneFrom(ctx, builder, snapLabel, name); err != nil {
+	// Clone the sandbox.
+	if err := t.Backend.CloneFrom(ctx, target, latest.Label, name); err != nil {
 		t.State.MarkFailed(name, fmt.Errorf("clone: %w", err))
 		_ = t.persist()
 		return
 	}
-
 	if err := t.Backend.Ready(ctx, name, 2*time.Minute); err != nil {
 		t.State.MarkFailed(name, fmt.Errorf("ready: %w", err))
 		_ = t.persist()
@@ -329,10 +324,7 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 	}
 	t.State.MarkRunning(name)
 	t.State.BumpActivity(name, time.Now().UTC())
-	if ctx.Err() == nil {
-		_ = t.persist()
-	}
-	t.log().Info("cloned from base", "name", name, "base", in.Base)
+	_ = t.persist()
 }
 
 
@@ -436,7 +428,7 @@ func (t *Tools) ListBases(ctx context.Context, _ EmptyIn) (ListBasesOut, error) 
 		}
 
 		// Snapshot present or absent?
-		_, err := t.Backend.Get(ctx, BuilderContainerName(name))
+		_, err := t.Backend.Get(ctx, BaseName(t.Cfg, name))
 		exists := false
 		switch {
 		case err == nil:
@@ -445,7 +437,7 @@ func (t *Tools) ListBases(ctx context.Context, _ EmptyIn) (ListBasesOut, error) 
 			// genuinely missing — OK
 		default:
 			// fatal: log and mark as missing (best-effort)
-			t.log().Warn("failed to check builder container", "base", name, "err", err)
+			t.log().Warn("failed to check base container", "base", name, "err", err)
 		}
 		if exists {
 			view.Status = "ready"

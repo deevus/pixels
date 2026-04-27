@@ -88,8 +88,8 @@ func runRebuildBase(cmd *cobra.Command, args []string) error {
 	}
 	defer bl.Release()
 
-	// BuildBase already handles rebuilds: it best-effort deletes the existing
-	// builder container at the start, then creates a fresh one.
+	// BuildBase creates a fresh container and initial snapshot. To rebuild,
+	// manually delete the existing base container first if needed.
 	return mcppkg.BuildBase(context.Background(), sb, cfg, name, baseCfg, os.Stderr)
 }
 

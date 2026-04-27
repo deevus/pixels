@@ -37,8 +37,12 @@ func TestBuildBaseFromParentImage(t *testing.T) {
 	if be.created[0].Name != "px-base-python" {
 		t.Errorf("container name = %q, want px-base-python", be.created[0].Name)
 	}
-	if got := be.snapshots["px-base-python:initial"]; got == (time.Time{}) {
-		t.Errorf("expected initial checkpoint on px-base-python; got snapshots=%v", be.snapshots)
+	got, ok := be.snapshots["px-base-python:initial"]
+	if !ok {
+		t.Errorf("expected initial checkpoint on px-base-python; key missing from snapshots=%v", be.snapshots)
+	}
+	if ts, isTime := got.(time.Time); !isTime || ts.IsZero() {
+		t.Errorf("expected non-zero time.Time at px-base-python:initial; got %#v", got)
 	}
 }
 
