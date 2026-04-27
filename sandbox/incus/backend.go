@@ -422,25 +422,6 @@ func (i *Incus) ListSnapshots(ctx context.Context, name string) ([]sandbox.Snaps
 	return result, nil
 }
 
-// SnapshotExists reports whether a snapshot with the given label exists on
-// the named instance. If the instance is not found it returns (false, nil)
-// so callers do not need to disambiguate "no instance" from "no snapshot".
-func (i *Incus) SnapshotExists(ctx context.Context, instanceName, label string) (bool, error) {
-	snaps, err := i.ListSnapshots(ctx, instanceName)
-	if err != nil {
-		// Treat instance-not-found as "no snapshot exists" — non-fatal.
-		if errors.Is(sandbox.WrapNotFound(err), sandbox.ErrNotFound) {
-			return false, nil
-		}
-		return false, err
-	}
-	for _, s := range snaps {
-		if s.Label == label {
-			return true, nil
-		}
-	}
-	return false, nil
-}
 
 // DeleteSnapshot deletes a snapshot by label.
 func (i *Incus) DeleteSnapshot(ctx context.Context, name, label string) error {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -285,11 +286,13 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 	// of the build, which may be minutes — that's fine; we're in a goroutine.
 	builder := BuilderContainerName(in.Base)
 	snapLabel := SnapshotName(in.Base)
-	exists, err := t.Backend.SnapshotExists(ctx, builder, snapLabel)
-	if err != nil {
-		t.log().Warn("snapshot existence check failed; will rebuild", "base", in.Base, "err", err)
+	_, err := t.Backend.Get(ctx, builder)
+	exists := err == nil
+	if err != nil && !errors.Is(sandbox.WrapNotFound(err), sandbox.ErrNotFound) {
+		t.log().Warn("failed to check builder container", "base", in.Base, "err", err)
 		exists = false
 	}
+	_ = snapLabel // TODO: will be used in Task 9 for checkpoint listing
 	if !exists {
 		if err := t.Builder.Build(ctx, in.Base); err != nil {
 			t.State.MarkFailed(name, fmt.Errorf("build base %s: %w", in.Base, err))
@@ -434,9 +437,10 @@ func (t *Tools) ListBases(ctx context.Context, _ EmptyIn) (ListBasesOut, error) 
 		}
 
 		// Snapshot present or absent?
-		exists, err := t.Backend.SnapshotExists(ctx, BuilderContainerName(name), SnapshotName(name))
-		if err != nil {
-			t.log().Warn("snapshot existence check failed", "base", name, "err", err)
+		_, err := t.Backend.Get(ctx, BuilderContainerName(name))
+		exists := err == nil
+		if err != nil && !errors.Is(sandbox.WrapNotFound(err), sandbox.ErrNotFound) {
+			t.log().Warn("failed to check builder container", "base", name, "err", err)
 			exists = false
 		}
 		if exists {

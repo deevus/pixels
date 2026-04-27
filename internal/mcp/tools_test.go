@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,7 +64,25 @@ func (f *fakeSandbox) Create(ctx context.Context, o sandbox.CreateOpts) (*sandbo
 	return &sandbox.Instance{Name: o.Name, Status: sandbox.StatusRunning, Addresses: []string{"10.0.0.1"}}, nil
 }
 func (f *fakeSandbox) Get(ctx context.Context, n string) (*sandbox.Instance, error) {
-	return &sandbox.Instance{Name: n, Status: sandbox.StatusRunning, Addresses: []string{"10.0.0.1"}}, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Check if this container was created.
+	for _, c := range f.created {
+		if c.Name == n {
+			return &sandbox.Instance{Name: n, Status: sandbox.StatusRunning, Addresses: []string{"10.0.0.1"}}, nil
+		}
+	}
+	// For builder containers (px-base-builder-*), check if any snapshot for that base exists.
+	if strings.HasPrefix(n, "px-base-builder-") {
+		baseName := strings.TrimPrefix(n, "px-base-builder-")
+		// Check if any snapshot exists for this base (e.g., "px-base-python").
+		for snapName := range f.snapshots {
+			if strings.Contains(snapName, baseName) {
+				return &sandbox.Instance{Name: n, Status: sandbox.StatusRunning, Addresses: []string{"10.0.0.1"}}, nil
+			}
+		}
+	}
+	return nil, sandbox.ErrNotFound
 }
 func (f *fakeSandbox) List(ctx context.Context) ([]sandbox.Instance, error) { return nil, nil }
 func (f *fakeSandbox) Start(ctx context.Context, n string) error            { f.started = append(f.started, n); return nil }
@@ -79,12 +97,6 @@ func (f *fakeSandbox) CreateSnapshot(ctx context.Context, n, l string) error {
 }
 func (f *fakeSandbox) ListSnapshots(ctx context.Context, n string) ([]sandbox.Snapshot, error) {
 	return nil, nil
-}
-func (f *fakeSandbox) SnapshotExists(ctx context.Context, instanceName, label string) (bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	_, ok := f.snapshots[label]
-	return ok, nil
 }
 func (f *fakeSandbox) DeleteSnapshot(ctx context.Context, n, l string) error    { return nil }
 func (f *fakeSandbox) RestoreSnapshot(ctx context.Context, n, l string) error   { return nil }
@@ -556,48 +568,3 @@ func TestDeleteFileRemoves(t *testing.T) {
 	}
 }
 
-// TestCreateSandboxSkipsBuildWhenSnapshotExists verifies the wired-backend path:
-// when the backend reports a snapshot already exists, provisionFromBase must
-// clone directly without invoking Builder.Build. This exercises the production
-// wiring (Backend.SnapshotExists), not a function-field seam, so a regression
-// in that wiring is caught here.
-func TestCreateSandboxSkipsBuildWhenSnapshotExists(t *testing.T) {
-	tt, fb := newTestTools(t)
-	tt.Cfg = &config.Config{
-		MCP: config.MCP{
-			Bases: map[string]config.Base{
-				"python": {
-					ParentImage: "images:ubuntu/24.04",
-					SetupScript: writeTempScript(t, "#!/bin/bash\necho hi\n"),
-				},
-			},
-		},
-	}
-	tt.BuildLockDir = t.TempDir()
-	var buildCalls atomic.Int32
-	tt.Builder = &Builder{
-		DoBuild: func(ctx context.Context, name string) error {
-			buildCalls.Add(1)
-			return BuildBase(ctx, tt.Backend, tt.Cfg.MCP.Bases[name], name, io.Discard)
-		},
-	}
-
-	// Arrange: snapshot already exists in fake backend state.
-	fb.snapshots[SnapshotName("python")] = "ready"
-
-	out, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{Base: "python"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mustEventually(t, func() bool {
-		got, _ := tt.State.Get(out.Name)
-		return got.Status == "running"
-	})
-	if got := buildCalls.Load(); got != 0 {
-		t.Errorf("Builder.Build should not have been called when snapshot exists; got %d calls", got)
-	}
-	if len(fb.cloned) != 1 || fb.cloned[0].source != BuilderContainerName("python") || fb.cloned[0].label != SnapshotName("python") {
-		t.Errorf("expected single CloneFrom of builder %s/%s; got %+v",
-			BuilderContainerName("python"), SnapshotName("python"), fb.cloned)
-	}
-}

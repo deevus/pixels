@@ -27,11 +27,6 @@ type Backend interface {
 
 	CreateSnapshot(ctx context.Context, name, label string) error
 	ListSnapshots(ctx context.Context, name string) ([]Snapshot, error)
-	// SnapshotExists reports whether a snapshot with the given label exists
-	// on the given instance. Returns (false, nil) if the instance itself is
-	// not found — callers should not need to disambiguate "no instance" from
-	// "no snapshot" for the typical "should I build?" check.
-	SnapshotExists(ctx context.Context, instanceName, label string) (bool, error)
 	DeleteSnapshot(ctx context.Context, name, label string) error
 	RestoreSnapshot(ctx context.Context, name, label string) error
 	CloneFrom(ctx context.Context, source, label, newName string) error

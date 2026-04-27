@@ -277,25 +277,6 @@ func (t *TrueNAS) ListSnapshots(ctx context.Context, name string) ([]sandbox.Sna
 	return result, nil
 }
 
-// SnapshotExists reports whether a snapshot with the given label exists on
-// the named instance. If the instance is not found it returns (false, nil)
-// so callers do not need to disambiguate "no instance" from "no snapshot".
-func (t *TrueNAS) SnapshotExists(ctx context.Context, instanceName, label string) (bool, error) {
-	snaps, err := t.ListSnapshots(ctx, instanceName)
-	if err != nil {
-		// Treat instance-not-found as "no snapshot exists" — non-fatal.
-		if errors.Is(sandbox.WrapNotFound(err), sandbox.ErrNotFound) {
-			return false, nil
-		}
-		return false, err
-	}
-	for _, s := range snaps {
-		if s.Label == label {
-			return true, nil
-		}
-	}
-	return false, nil
-}
 
 // DeleteSnapshot deletes a ZFS snapshot by label.
 func (t *TrueNAS) DeleteSnapshot(ctx context.Context, name, label string) error {
