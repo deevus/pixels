@@ -730,3 +730,63 @@ func TestExpandHome(t *testing.T) {
 		t.Errorf("expandHome(%q) should return unchanged", abs)
 	}
 }
+
+func TestMCPBasePrefixDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.MCP.BasePrefix, "px-base-"; got != want {
+		t.Errorf("BasePrefix = %q, want %q", got, want)
+	}
+}
+
+func TestMCPBasePrefixEnvOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Setenv("PIXELS_MCP_BASE_PREFIX", "custom-")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.MCP.BasePrefix, "custom-"; got != want {
+		t.Errorf("BasePrefix = %q, want %q", got, want)
+	}
+}
+
+func TestBaseFromField(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`
+[mcp.bases.dev]
+parent_image = "images:ubuntu/24.04"
+setup_script = "/tmp/dev.sh"
+description = "Dev"
+
+[mcp.bases.python]
+from = "dev"
+setup_script = "/tmp/python.sh"
+description = "Python"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.MCP.Bases["python"].From; got != "dev" {
+		t.Errorf("python.From = %q, want dev", got)
+	}
+	if got := cfg.MCP.Bases["dev"].ParentImage; got != "images:ubuntu/24.04" {
+		t.Errorf("dev.ParentImage = %q", got)
+	}
+}

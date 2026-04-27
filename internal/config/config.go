@@ -46,12 +46,14 @@ type TrueNAS struct {
 
 type Base struct {
 	ParentImage string `toml:"parent_image"`
+	From        string `toml:"from"`
 	SetupScript string `toml:"setup_script"`
 	Description string `toml:"description"`
 }
 
 type MCP struct {
 	Prefix           string          `toml:"prefix"             env:"PIXELS_MCP_PREFIX"`
+	BasePrefix       string          `toml:"base_prefix"        env:"PIXELS_MCP_BASE_PREFIX"`
 	DefaultImage     string          `toml:"default_image"      env:"PIXELS_MCP_DEFAULT_IMAGE"`
 	IdleStopAfter    string          `toml:"idle_stop_after"    env:"PIXELS_MCP_IDLE_STOP_AFTER"`
 	HardDestroyAfter string          `toml:"hard_destroy_after" env:"PIXELS_MCP_HARD_DESTROY_AFTER"`
@@ -143,6 +145,7 @@ func Load() (*Config, error) {
 		},
 		MCP: MCP{
 			Prefix:           "px-mcp-",
+			BasePrefix:       "px-base-",
 			IdleStopAfter:    "1h",
 			HardDestroyAfter: "24h",
 			ReapInterval:     "1m",
