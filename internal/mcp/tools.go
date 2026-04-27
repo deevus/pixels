@@ -229,7 +229,10 @@ func (t *Tools) StartSandbox(ctx context.Context, in SandboxRef) (CreateSandboxO
 	return CreateSandboxOut{Name: in.Name, IP: ip, Status: "running"}, nil
 }
 
-func (t *Tools) ListSandboxes(ctx context.Context) (ListSandboxesOut, error) {
+// EmptyIn is a placeholder input type for tools that take no arguments.
+type EmptyIn struct{}
+
+func (t *Tools) ListSandboxes(ctx context.Context, _ EmptyIn) (ListSandboxesOut, error) {
 	now := time.Now().UTC()
 	in := t.State.Sandboxes()
 	out := make([]SandboxView, 0, len(in))
