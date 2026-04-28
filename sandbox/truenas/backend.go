@@ -209,7 +209,9 @@ func (t *TrueNAS) Stop(ctx context.Context, name string) error {
 	return nil
 }
 
-// Delete stops (if running) and deletes an instance with retry.
+// Delete stops (if running) and deletes an instance with retry. Returns an
+// error wrapping sandbox.ErrNotFound if the instance is already gone, so
+// callers can distinguish "already absent" from real failures.
 func (t *TrueNAS) Delete(ctx context.Context, name string) error {
 	full := prefixed(name)
 
@@ -217,11 +219,13 @@ func (t *TrueNAS) Delete(ctx context.Context, name string) error {
 	_ = t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30})
 
 	// Resolve IP before deletion so we can clean up the known_hosts entry.
-	inst, _ := t.client.Virt.GetInstance(ctx, full)
-	var ip string
-	if inst != nil {
-		ip = ipFromAliases(inst.Aliases)
+	// If the instance is already gone, short-circuit with ErrNotFound so
+	// callers (e.g. MCP DestroySandbox) can clean up their state idempotently.
+	inst, getErr := t.client.Virt.GetInstance(ctx, full)
+	if inst == nil || errors.Is(sandbox.WrapNotFound(getErr), sandbox.ErrNotFound) {
+		return sandbox.WrapNotFound(fmt.Errorf("instance %q does not exist", name))
 	}
+	ip := ipFromAliases(inst.Aliases)
 
 	// Retry delete (Incus storage release timing).
 	if err := retry.Do(ctx, 3, 2*time.Second, func(ctx context.Context) error {

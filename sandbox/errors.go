@@ -31,7 +31,10 @@ func WrapNotFound(err error) error {
 		return err
 	}
 	msg := err.Error()
-	if strings.Contains(msg, "not found") || strings.Contains(msg, "Not Found") {
+	// TrueNAS uses "does not exist"; Incus and HTTP layers use "not found"/"Not Found".
+	if strings.Contains(msg, "not found") ||
+		strings.Contains(msg, "Not Found") ||
+		strings.Contains(msg, "does not exist") {
 		return fmt.Errorf("%w: %s", ErrNotFound, msg)
 	}
 	return err

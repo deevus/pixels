@@ -174,6 +174,9 @@ func TestDelete(t *testing.T) {
 		var deleteCalled bool
 		tn := newTestBackend(t, &Client{
 			Virt: &tnapi.MockVirtService{
+				GetInstanceFunc: func(ctx context.Context, name string) (*tnapi.VirtInstance, error) {
+					return &tnapi.VirtInstance{Name: name, Status: "RUNNING"}, nil
+				},
 				StopInstanceFunc: func(ctx context.Context, name string, opts tnapi.StopVirtInstanceOpts) error {
 					return nil
 				},
@@ -198,6 +201,9 @@ func TestDelete(t *testing.T) {
 		attempts := 0
 		tn := newTestBackend(t, &Client{
 			Virt: &tnapi.MockVirtService{
+				GetInstanceFunc: func(ctx context.Context, name string) (*tnapi.VirtInstance, error) {
+					return &tnapi.VirtInstance{Name: name, Status: "RUNNING"}, nil
+				},
 				StopInstanceFunc: func(ctx context.Context, name string, opts tnapi.StopVirtInstanceOpts) error {
 					return nil
 				},
@@ -216,6 +222,29 @@ func TestDelete(t *testing.T) {
 		}
 		if attempts != 3 {
 			t.Errorf("attempts = %d, want 3", attempts)
+		}
+	})
+
+	t.Run("missing instance returns ErrNotFound", func(t *testing.T) {
+		var deleteCalled bool
+		tn := newTestBackend(t, &Client{
+			Virt: &tnapi.MockVirtService{
+				GetInstanceFunc: func(ctx context.Context, name string) (*tnapi.VirtInstance, error) {
+					return nil, errors.New("VirtInstance px-test does not exist")
+				},
+				DeleteInstanceFunc: func(ctx context.Context, name string) error {
+					deleteCalled = true
+					return nil
+				},
+			},
+		})
+
+		err := tn.Delete(context.Background(), "test")
+		if !errors.Is(err, sandbox.ErrNotFound) {
+			t.Errorf("expected ErrNotFound; got %v", err)
+		}
+		if deleteCalled {
+			t.Error("DeleteInstance should not be called when GetInstance reports missing")
 		}
 	})
 }

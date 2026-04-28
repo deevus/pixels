@@ -322,9 +322,11 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 
 
 func (t *Tools) DestroySandbox(ctx context.Context, in SandboxRef) (Ack, error) {
-	if err := t.Backend.Delete(ctx, in.Name); err != nil {
+	if err := t.Backend.Delete(ctx, in.Name); err != nil && !errors.Is(err, sandbox.ErrNotFound) {
 		return Ack{}, err
 	}
+	// Backend either deleted the instance or it was already gone. Either way,
+	// drop the state record so ghosts don't accumulate.
 	t.State.Remove(in.Name)
 	_ = t.persist()
 	return Ack{OK: true}, nil

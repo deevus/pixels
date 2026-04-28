@@ -40,6 +40,7 @@ type fakeSandbox struct {
 	containers map[string]sandbox.Instance
 	clonedNew  []cloneCall
 	runs       [][]string
+	deleteErr  error // injected; Delete returns this if non-nil
 }
 
 func newFakeSandbox() *fakeSandbox {
@@ -99,7 +100,10 @@ func (f *fakeSandbox) Get(ctx context.Context, n string) (*sandbox.Instance, err
 func (f *fakeSandbox) List(ctx context.Context) ([]sandbox.Instance, error) { return nil, nil }
 func (f *fakeSandbox) Start(ctx context.Context, n string) error            { f.started = append(f.started, n); return nil }
 func (f *fakeSandbox) Stop(ctx context.Context, n string) error             { f.stopped = append(f.stopped, n); return nil }
-func (f *fakeSandbox) Delete(ctx context.Context, n string) error           { f.deleted = append(f.deleted, n); return nil }
+func (f *fakeSandbox) Delete(ctx context.Context, n string) error {
+	f.deleted = append(f.deleted, n)
+	return f.deleteErr
+}
 func (f *fakeSandbox) CreateSnapshot(ctx context.Context, n, l string) error {
 	if f.snapshots == nil {
 		f.snapshots = make(map[string]interface{})
@@ -691,6 +695,20 @@ func TestDeleteFileRemoves(t *testing.T) {
 	}
 	if _, ok := be.files["/x"]; ok {
 		t.Error("file should be deleted")
+	}
+}
+
+func TestDestroySandboxRemovesGhostState(t *testing.T) {
+	tt, be := newTestTools(t)
+	// Pre-seed a state record without a corresponding backend instance — a ghost.
+	tt.State.MarkRunning("mcp-ghost")
+	be.deleteErr = sandbox.WrapNotFound(errors.New("does not exist"))
+
+	if _, err := tt.DestroySandbox(context.Background(), SandboxRef{Name: "mcp-ghost"}); err != nil {
+		t.Fatalf("DestroySandbox should treat ErrNotFound as success; got %v", err)
+	}
+	if _, ok := tt.State.Get("mcp-ghost"); ok {
+		t.Errorf("ghost state record should be removed even when backend reports ErrNotFound")
 	}
 }
 
