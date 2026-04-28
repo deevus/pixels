@@ -153,8 +153,8 @@ func TestStop(t *testing.T) {
 				if name != "px-test" {
 					t.Errorf("stop called with %q", name)
 				}
-				if opts.Timeout != 30 {
-					t.Errorf("timeout = %d, want 30", opts.Timeout)
+				if opts.Timeout != stopTimeoutSeconds {
+					t.Errorf("timeout = %d, want %d", opts.Timeout, stopTimeoutSeconds)
 				}
 				return nil
 			},

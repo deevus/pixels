@@ -17,6 +17,13 @@ import (
 	"github.com/deevus/pixels/sandbox"
 )
 
+// stopTimeoutSeconds is the graceful shutdown timeout passed to Incus via
+// virt.instance.stop. Incus runs `cc.Shutdown(0)` and waits this long for
+// systemd to stop all units inside the container; on timeout the call
+// returns a "Failed shutting down instance" error. Sized to cover the
+// post-apt systemd settle that 30s wasn't enough for.
+const stopTimeoutSeconds int64 = 120
+
 // clearAndRefreshHostKey removes stale known_hosts entries for both IP and hostname,
 // then waits for SSH readiness.
 func (t *TrueNAS) clearAndRefreshHostKey(ctx context.Context, name, ip, hostname string, timeout time.Duration) {
@@ -115,7 +122,7 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 				t.warnf("provision %s: %v", name, err)
 			} else if pubKey != "" {
 				// Restart so rc.local runs on boot.
-				_ = t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30})
+				_ = t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: stopTimeoutSeconds})
 				if err := t.client.Virt.StartInstance(ctx, full); err != nil {
 					return nil, fmt.Errorf("restarting after provision: %w", err)
 				}
@@ -202,7 +209,7 @@ func (t *TrueNAS) Start(ctx context.Context, name string) error {
 // Stop stops a running instance. No-ops if the instance is already stopped.
 func (t *TrueNAS) Stop(ctx context.Context, name string) error {
 	if err := t.client.StopInstanceIfRunning(ctx, prefixed(name), tnapi.StopVirtInstanceOpts{
-		Timeout: 30,
+		Timeout: stopTimeoutSeconds,
 	}); err != nil {
 		return fmt.Errorf("stopping %s: %w", name, err)
 	}
@@ -216,7 +223,7 @@ func (t *TrueNAS) Delete(ctx context.Context, name string) error {
 	full := prefixed(name)
 
 	// Best-effort stop.
-	_ = t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30})
+	_ = t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: stopTimeoutSeconds})
 
 	// Resolve IP before deletion so we can clean up the known_hosts entry.
 	// If the instance is already gone, short-circuit with ErrNotFound so
@@ -300,7 +307,7 @@ func (t *TrueNAS) RestoreSnapshot(ctx context.Context, name, label string) error
 		return err
 	}
 
-	if err := t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30}); err != nil {
+	if err := t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: stopTimeoutSeconds}); err != nil {
 		return fmt.Errorf("stopping %s: %w", name, err)
 	}
 	if err := t.client.SnapshotRollback(ctx, ds+"@"+label); err != nil {
@@ -357,7 +364,7 @@ func (t *TrueNAS) CloneFrom(ctx context.Context, source, label, newName string) 
 
 	// Defensive stop in case the shell ended up running (Autostart=false should
 	// keep it stopped, but the helper makes it a no-op either way).
-	if err := t.client.StopInstanceIfRunning(ctx, prefixed(newName), tnapi.StopVirtInstanceOpts{Timeout: 30}); err != nil {
+	if err := t.client.StopInstanceIfRunning(ctx, prefixed(newName), tnapi.StopVirtInstanceOpts{Timeout: stopTimeoutSeconds}); err != nil {
 		return fmt.Errorf("stopping clone shell: %w", err)
 	}
 
