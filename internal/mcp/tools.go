@@ -438,10 +438,19 @@ func (t *Tools) ListBases(ctx context.Context, _ EmptyIn) (ListBasesOut, error) 
 			out = append(out, v)
 			continue
 		}
-		v.Status = "ready"
-		if latest, ok, err := LatestCheckpointFor(ctx, t.Backend, container); err == nil && ok {
-			t := latest.CreatedAt
-			v.LastCheckpoint = &t
+		// Container exists. Determine readiness from checkpoint presence:
+		// no checkpoint = build in progress (or was aborted) — clones would fail.
+		latest, ok, err := LatestCheckpointFor(ctx, t.Backend, container)
+		switch {
+		case err != nil:
+			v.Status = "failed"
+			v.Error = err.Error()
+		case !ok:
+			v.Status = "building"
+		default:
+			v.Status = "ready"
+			ts := latest.CreatedAt
+			v.LastCheckpoint = &ts
 		}
 		out = append(out, v)
 	}

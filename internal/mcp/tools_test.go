@@ -270,6 +270,33 @@ func TestListBasesReturnsConfiguredBases(t *testing.T) {
 	}
 }
 
+func TestListBasesReportsBuildingWhenContainerHasNoCheckpoint(t *testing.T) {
+	tt, fb := newTestTools(t)
+	tt.Cfg = &config.Config{
+		MCP: config.MCP{
+			Bases: map[string]config.Base{
+				"dev": {ParentImage: "ubuntu/24.04", Description: "Dev"},
+			},
+		},
+	}
+	tt.Builder = &Builder{}
+	// Container exists (created during build) but no checkpoint yet (script
+	// still running). Status should be "building", not "ready".
+	fb.created = append(fb.created, sandbox.CreateOpts{Name: "base-dev"})
+
+	out, err := tt.ListBases(context.Background(), EmptyIn{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, b := range out.Bases {
+		got[b.Name] = b.Status
+	}
+	if got["dev"] != "building" {
+		t.Errorf("dev status = %q, want building", got["dev"])
+	}
+}
+
 func TestListBasesIncludesFromAndLastCheckpoint(t *testing.T) {
 	tt, fb := newTestTools(t)
 	tt.Cfg = &config.Config{
