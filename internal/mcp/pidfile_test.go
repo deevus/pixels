@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -45,6 +47,47 @@ func TestAcquirePIDFileStalePID(t *testing.T) {
 		t.Fatalf("acquire: %v (expected stale PID to be overwritten)", err)
 	}
 	defer pf.Release()
+}
+
+// TestAcquirePIDFileConcurrent races N goroutines on the same path. Exactly
+// one should win; the rest must observe the live owner and fail.
+func TestAcquirePIDFileConcurrent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.pid")
+	const N = 32
+
+	var wg sync.WaitGroup
+	var winners atomic.Int32
+	var failures atomic.Int32
+	pfCh := make(chan *PIDFile, N)
+	start := make(chan struct{})
+
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			pf, err := AcquirePIDFile(path)
+			if err == nil {
+				winners.Add(1)
+				pfCh <- pf
+				return
+			}
+			failures.Add(1)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(pfCh)
+
+	if got := winners.Load(); got != 1 {
+		t.Errorf("winners = %d, want exactly 1", got)
+	}
+	if got := failures.Load(); got != N-1 {
+		t.Errorf("failures = %d, want %d", got, N-1)
+	}
+	for pf := range pfCh {
+		_ = pf.Release()
+	}
 }
 
 func TestPIDFileReleaseRemovesFile(t *testing.T) {
