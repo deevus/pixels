@@ -122,36 +122,15 @@ func runCreate(cmd *cobra.Command, args []string) error {
 			setStatus(fmt.Sprintf("Cloning from %s checkpoint %q...", fromSource, fromLabel))
 		}
 
-		// Create a bare container (no provisioning/SSH wait) — we'll replace its rootfs.
-		logv(cmd, "Creating bare container %s...", name)
-		_, err := sb.Create(ctx, sandbox.CreateOpts{
-			Name:   name,
-			Image:  image,
-			CPU:    cpu,
-			Memory: memory * 1024 * 1024,
-			Bare:   true,
-		})
-		if err != nil {
-			return fmt.Errorf("creating instance: %w", err)
-		}
-
-		logv(cmd, "Stopping %s for rootfs replacement...", name)
-		if err := sb.Stop(ctx, name); err != nil {
-			return fmt.Errorf("stopping %s for clone: %w", name, err)
-		}
-
-		logv(cmd, "Cloning snapshot %s:%s...", fromSource, fromLabel)
+		logv(cmd, "Cloning from %s:%s...", fromSource, fromLabel)
 		if err := sb.CloneFrom(ctx, fromSource, fromLabel, name); err != nil {
-			_ = sb.Delete(ctx, name)
-			return fmt.Errorf("cloning checkpoint: %w", err)
-		}
-
-		if err := sb.Start(ctx, name); err != nil {
-			return fmt.Errorf("starting %s: %w", name, err)
+			return fmt.Errorf("cloning from %s: %w", fromSource, err)
 		}
 
 		setStatus("Waiting for SSH...")
-		_ = sb.Ready(ctx, name, 30*time.Second)
+		if err := sb.Ready(ctx, name, 30*time.Second); err != nil {
+			return fmt.Errorf("waiting for %s: %w", name, err)
+		}
 	} else {
 		// Normal create flow — sandbox handles provisioning, IP poll, SSH wait.
 		setStatus("Creating...")
