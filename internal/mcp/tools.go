@@ -192,6 +192,17 @@ const (
 	pixelGID = 1000
 )
 
+// editFileMaxBytes caps the in-memory read for EditFile. Editing past this
+// would silently truncate the rest of the file on write-back.
+const editFileMaxBytes = 10 * 1024 * 1024
+
+// readFileDefaultMaxBytes is the implicit cap when a caller omits MaxBytes.
+// readFileHardMaxBytes is the absolute upper bound; larger requests are clamped.
+const (
+	readFileDefaultMaxBytes int64 = 1 * 1024 * 1024
+	readFileHardMaxBytes    int64 = 10 * 1024 * 1024
+)
+
 func parseMode(s string, fallback os.FileMode) (os.FileMode, error) {
 	if s == "" {
 		return fallback, nil
@@ -624,7 +635,13 @@ func (t *Tools) ReadFile(ctx context.Context, in ReadFileIn) (ReadFileOut, error
 	mu.Lock()
 	defer mu.Unlock()
 
-	body, truncated, err := t.Backend.ReadFile(ctx, sb.Name, in.Path, in.MaxBytes)
+	maxBytes := in.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = readFileDefaultMaxBytes
+	} else if maxBytes > readFileHardMaxBytes {
+		maxBytes = readFileHardMaxBytes
+	}
+	body, truncated, err := t.Backend.ReadFile(ctx, sb.Name, in.Path, maxBytes)
 	if err != nil {
 		return ReadFileOut{}, err
 	}
@@ -669,9 +686,12 @@ func (t *Tools) EditFile(ctx context.Context, in EditFileIn) (EditFileOut, error
 	mu.Lock()
 	defer mu.Unlock()
 
-	body, _, err := t.Backend.ReadFile(ctx, sb.Name, in.Path, 0)
+	body, truncated, err := t.Backend.ReadFile(ctx, sb.Name, in.Path, editFileMaxBytes)
 	if err != nil {
 		return EditFileOut{}, fmt.Errorf("read: %w", err)
+	}
+	if truncated {
+		return EditFileOut{}, fmt.Errorf("file %s exceeds %d bytes; refusing to edit (would truncate trailing content)", in.Path, editFileMaxBytes)
 	}
 	original := string(body)
 	count := strings.Count(original, in.OldString)

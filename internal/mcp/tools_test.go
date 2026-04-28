@@ -761,6 +761,49 @@ func TestEditFileChownsToPixel(t *testing.T) {
 	}
 }
 
+func TestEditFileRejectsTooLarge(t *testing.T) {
+	tt, be := newTestTools(t)
+	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+	big := make([]byte, editFileMaxBytes+1)
+	for i := range big {
+		big[i] = 'a'
+	}
+	be.files["/big"] = big
+	_, err := tt.EditFile(context.Background(), EditFileIn{
+		Name:      out.Name,
+		Path:      "/big",
+		OldString: "a",
+		NewString: "b",
+	})
+	if err == nil {
+		t.Fatal("expected error for file exceeding editFileMaxBytes")
+	}
+}
+
+func TestReadFileClampsToHardMax(t *testing.T) {
+	tt, be := newTestTools(t)
+	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+	big := make([]byte, readFileHardMaxBytes+1024)
+	for i := range big {
+		big[i] = 'x'
+	}
+	be.files["/big"] = big
+	res, err := tt.ReadFile(context.Background(), ReadFileIn{
+		Name:     out.Name,
+		Path:     "/big",
+		MaxBytes: readFileHardMaxBytes * 2,
+	})
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if int64(len(res.Content)) != readFileHardMaxBytes {
+		t.Errorf("len(content) = %d, want %d (clamped to hard ceiling)", len(res.Content), readFileHardMaxBytes)
+	}
+	if !res.Truncated {
+		t.Error("Truncated should be true when content exceeds clamp")
+	}
+}
+
 func TestWriteFileRejectsInvalidMode(t *testing.T) {
 	tt, _ := newTestTools(t)
 	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
