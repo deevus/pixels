@@ -192,15 +192,15 @@ const (
 	pixelGID = 1000
 )
 
-func parseMode(s string, fallback os.FileMode) os.FileMode {
+func parseMode(s string, fallback os.FileMode) (os.FileMode, error) {
 	if s == "" {
-		return fallback
+		return fallback, nil
 	}
 	n, err := strconv.ParseUint(s, 8, 32)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("invalid mode %q: must be octal (e.g. \"0644\", \"755\"): %w", s, err)
 	}
-	return os.FileMode(n)
+	return os.FileMode(n), nil
 }
 
 // --- Lifecycle handlers ---
@@ -599,7 +599,10 @@ func (t *Tools) WriteFile(ctx context.Context, in WriteFileIn) (WriteFileOut, er
 	if err != nil {
 		return WriteFileOut{}, err
 	}
-	mode := parseMode(in.Mode, 0o644)
+	mode, err := parseMode(in.Mode, 0o644)
+	if err != nil {
+		return WriteFileOut{}, err
+	}
 	mu := t.Locks.For(sb.Name)
 	mu.Lock()
 	defer mu.Unlock()

@@ -761,6 +761,20 @@ func TestEditFileChownsToPixel(t *testing.T) {
 	}
 }
 
+func TestWriteFileRejectsInvalidMode(t *testing.T) {
+	tt, _ := newTestTools(t)
+	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+	_, err := tt.WriteFile(context.Background(), WriteFileIn{
+		Name:    out.Name,
+		Path:    "/x",
+		Content: "hi",
+		Mode:    "rwxr-xr-x", // not octal
+	})
+	if err == nil {
+		t.Fatal("expected error for non-octal mode")
+	}
+}
+
 func TestDeleteFileRemoves(t *testing.T) {
 	tt, be := newTestTools(t)
 	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
