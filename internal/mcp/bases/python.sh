@@ -2,11 +2,24 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-# Mask Ubuntu's background apt timers so they don't race with our setup.
-systemctl mask --now apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+# Retry apt operations on lock contention. Setting DPkg::Lock::Timeout=0
+# makes apt fail immediately instead of polling once per second; our outer
+# loop waits 30s and emits a single semantic message per retry.
+apt_run() {
+  for attempt in $(seq 1 20); do
+    apt -q -o DPkg::Lock::Timeout=0 "$@" && return 0
+    [ "$attempt" -lt 20 ] || return 1
+    echo "Still waiting for apt lock... (attempt $attempt/20)" >&2
+    sleep 30
+  done
+}
 
-apt-get -o DPkg::Lock::Timeout=600 update
-apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
-  python3 python3-pip python3-venv pipx
-apt-get clean
-rm -rf /var/lib/apt/lists/*
+# Flock apt.systemd.daily's lockfile so apt-daily can't fire mid-build.
+{
+  flock --timeout 600 9
+  apt_run update
+  apt_run install -y --no-install-recommends \
+    python3 python3-pip python3-venv pipx
+  apt_run clean
+  rm -rf /var/lib/apt/lists/*
+} 9>/var/lib/apt/daily_lock

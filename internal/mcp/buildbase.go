@@ -94,7 +94,9 @@ func BuildBase(ctx context.Context, be sandbox.Sandbox, cfg *config.Config, name
 		return fmt.Errorf("base %s: ready: %w", name, err)
 	}
 
-	// Upload + run setup script.
+	// Upload + run setup script. Setup scripts coordinate with Ubuntu's
+	// boot-time apt activity themselves (flock on apt.systemd.daily's
+	// lockfile + retry on lists-lock contention).
 	progress("Uploading setup script...")
 	if err := be.WriteFile(ctx, target, "/tmp/pixels-setup.sh", scriptBytes, 0o755); err != nil {
 		cleanup()
