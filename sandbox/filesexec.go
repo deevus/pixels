@@ -24,8 +24,10 @@ type FilesViaExec struct {
 }
 
 // WriteFile creates parent dirs, streams content via stdin into `cat > path`,
-// then chmods to mode.
-func (f FilesViaExec) WriteFile(ctx context.Context, name, p string, content []byte, mode os.FileMode) error {
+// chmods to mode, and (if uid and gid are non-negative) chowns to uid:gid as
+// root. The exec context already runs as the configured sandbox user, so
+// when uid/gid match that user the chown is a no-op.
+func (f FilesViaExec) WriteFile(ctx context.Context, name, p string, content []byte, mode os.FileMode, uid, gid int) error {
 	if dir := path.Dir(p); dir != "." && dir != "/" {
 		if code, err := f.Exec.Run(ctx, name, ExecOpts{
 			Cmd: []string{"mkdir", "-p", "--", dir},
@@ -52,6 +54,16 @@ func (f FilesViaExec) WriteFile(ctx context.Context, name, p string, content []b
 		Cmd: []string{"chmod", fmt.Sprintf("%o", mode), "--", p},
 	}); err != nil || code != 0 {
 		return fmt.Errorf("chmod %s: code=%d err=%v", p, code, err)
+	}
+
+	if uid >= 0 && gid >= 0 {
+		owner := strconv.Itoa(uid) + ":" + strconv.Itoa(gid)
+		if code, err := f.Exec.Run(ctx, name, ExecOpts{
+			Cmd:  []string{"chown", "--", owner, p},
+			Root: true,
+		}); err != nil || code != 0 {
+			return fmt.Errorf("chown %s: code=%d err=%v", p, code, err)
+		}
 	}
 	return nil
 }

@@ -61,11 +61,19 @@ type FileEntry struct {
 
 // Files provides byte-level file I/O into a sandbox instance.
 type Files interface {
-	WriteFile(ctx context.Context, name, path string, content []byte, mode os.FileMode) error
+	// WriteFile writes content to path inside the sandbox with the given mode.
+	// uid/gid set the resulting file's ownership; pass negative values to
+	// leave the backend default (root for filesystem-API writes; the
+	// configured exec user for SSH/exec-based writes).
+	WriteFile(ctx context.Context, name, path string, content []byte, mode os.FileMode, uid, gid int) error
 	ReadFile(ctx context.Context, name, path string, maxBytes int64) (content []byte, truncated bool, err error)
 	ListFiles(ctx context.Context, name, path string, recursive bool) ([]FileEntry, error)
 	DeleteFile(ctx context.Context, name, path string) error
 }
+
+// NoOwner is the sentinel for "leave default ownership" passed to
+// [Files.WriteFile]. Either uid or gid being negative skips the chown.
+const NoOwner = -1
 
 // Sandbox composes all sandbox capabilities into a single interface.
 type Sandbox interface {

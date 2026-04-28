@@ -98,7 +98,9 @@ func BuildBase(ctx context.Context, be sandbox.Sandbox, cfg *config.Config, name
 	// boot-time apt activity themselves (flock on apt.systemd.daily's
 	// lockfile + retry on lists-lock contention).
 	progress("Uploading setup script...")
-	if err := be.WriteFile(ctx, target, "/tmp/pixels-setup.sh", scriptBytes, 0o755); err != nil {
+	// sandbox.NoOwner: leave the setup script root-owned. The script is run
+	// as root via Root: true below, so ownership is irrelevant.
+	if err := be.WriteFile(ctx, target, "/tmp/pixels-setup.sh", scriptBytes, 0o755, sandbox.NoOwner, sandbox.NoOwner); err != nil {
 		cleanup()
 		return fmt.Errorf("base %s: upload script: %w", name, err)
 	}

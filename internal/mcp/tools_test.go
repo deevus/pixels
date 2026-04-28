@@ -33,6 +33,7 @@ type fakeSandbox struct {
 	stopped    []string
 	started    []string
 	files      map[string][]byte
+	fileOwners map[string][2]int // path -> [uid, gid]; populated only when WriteFile got non-default owner
 	runHook    func(name string, opts sandbox.ExecOpts) (int, error)
 	createHook func(o sandbox.CreateOpts) (*sandbox.Instance, error)
 	snapshots  map[string]interface{} // key "<container>:<label>" -> created at (time.Time) OR old format "snapName" -> "ready"
@@ -175,10 +176,16 @@ func (e *errBackend) Run(ctx context.Context, name string, opts sandbox.ExecOpts
 }
 
 // Files capability (in-memory implementations so EditFile etc. round-trip).
-func (f *fakeSandbox) WriteFile(ctx context.Context, name, path string, content []byte, mode os.FileMode) error {
+func (f *fakeSandbox) WriteFile(ctx context.Context, name, path string, content []byte, mode os.FileMode, uid, gid int) error {
 	cp := make([]byte, len(content))
 	copy(cp, content)
 	f.files[path] = cp
+	if uid >= 0 && gid >= 0 {
+		if f.fileOwners == nil {
+			f.fileOwners = map[string][2]int{}
+		}
+		f.fileOwners[path] = [2]int{uid, gid}
+	}
 	return nil
 }
 func (f *fakeSandbox) ReadFile(ctx context.Context, name, path string, maxBytes int64) ([]byte, bool, error) {
@@ -710,6 +717,47 @@ func TestEditFileReplaceAll(t *testing.T) {
 	}
 	if string(be.files["/x"]) != "bbb" {
 		t.Errorf("content = %q", be.files["/x"])
+	}
+}
+
+func TestWriteFileChownsToPixel(t *testing.T) {
+	tt, be := newTestTools(t)
+	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+	if _, err := tt.WriteFile(context.Background(), WriteFileIn{
+		Name:    out.Name,
+		Path:    "/home/pixel/x",
+		Content: "data",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := be.fileOwners["/home/pixel/x"]
+	if !ok {
+		t.Fatal("WriteFile must request explicit ownership for MCP tools")
+	}
+	if want := [2]int{pixelUID, pixelGID}; got != want {
+		t.Errorf("owner = %v, want %v (MCP must always write as the pixel user)", got, want)
+	}
+}
+
+func TestEditFileChownsToPixel(t *testing.T) {
+	tt, be := newTestTools(t)
+	out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+	be.files["/home/pixel/main.py"] = []byte("hi")
+	delete(be.fileOwners, "/home/pixel/main.py")
+	if _, err := tt.EditFile(context.Background(), EditFileIn{
+		Name:      out.Name,
+		Path:      "/home/pixel/main.py",
+		OldString: "hi",
+		NewString: "bye",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := be.fileOwners["/home/pixel/main.py"]
+	if !ok {
+		t.Fatal("EditFile must request explicit ownership when writing back")
+	}
+	if want := [2]int{pixelUID, pixelGID}; got != want {
+		t.Errorf("owner = %v, want %v", got, want)
 	}
 }
 

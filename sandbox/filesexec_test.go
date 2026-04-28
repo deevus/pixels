@@ -38,13 +38,18 @@ func TestFilesViaExecWriteFile(t *testing.T) {
 	fe := &fakeExec{}
 	files := FilesViaExec{Exec: fe}
 
-	if err := files.WriteFile(context.Background(), "sb", "/tmp/foo.txt", []byte("hello"), 0o644); err != nil {
+	if err := files.WriteFile(context.Background(), "sb", "/tmp/foo.txt", []byte("hello"), 0o644, NoOwner, NoOwner); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Should have at least 2 calls (mkdir + cat write)
+	// Should have at least 2 calls (mkdir + cat write); chown skipped when NoOwner.
 	if got := len(fe.calls); got < 2 {
 		t.Fatalf("calls = %d, want >= 2: %+v", got, fe.calls)
+	}
+	for _, c := range fe.calls {
+		if c.Root {
+			t.Errorf("unexpected Root: true call when NoOwner passed: %+v", c)
+		}
 	}
 	// Find the cat write call and verify Stdin matches content.
 	var found bool
@@ -62,6 +67,31 @@ func TestFilesViaExecWriteFile(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("no cat-write call found in: %+v", fe.calls)
+	}
+}
+
+func TestFilesViaExecWriteFileChowns(t *testing.T) {
+	fe := &fakeExec{}
+	files := FilesViaExec{Exec: fe}
+
+	if err := files.WriteFile(context.Background(), "sb", "/home/pixel/x", []byte("data"), 0o644, 1000, 1000); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	var sawChown bool
+	for _, c := range fe.calls {
+		if len(c.Cmd) > 0 && c.Cmd[0] == "chown" {
+			sawChown = true
+			if !c.Root {
+				t.Error("chown call must use Root: true (only root can chown)")
+			}
+			joined := strings.Join(c.Cmd, " ")
+			if !strings.Contains(joined, "1000:1000") {
+				t.Errorf("chown args missing 1000:1000: %v", c.Cmd)
+			}
+		}
+	}
+	if !sawChown {
+		t.Errorf("expected a chown call when uid/gid >= 0; got %+v", fe.calls)
 	}
 }
 
