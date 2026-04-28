@@ -42,6 +42,9 @@ func BuildChain(ctx context.Context, cfg *config.Config, target string, exists f
 	}
 
 	for _, name := range order {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if exists(BaseName(cfg, name)) {
 			continue
 		}

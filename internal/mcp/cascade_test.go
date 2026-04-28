@@ -91,6 +91,33 @@ func TestBuildChainShortCircuitsOnBuildError(t *testing.T) {
 	}
 }
 
+func TestBuildChainHonorsContextCancel(t *testing.T) {
+	cfg := &config.Config{
+		MCP: config.MCP{
+			BasePrefix: "px-base-",
+			Bases: map[string]config.Base{
+				"dev":    {ParentImage: "images:ubuntu/24.04", SetupScript: "mcp:bases/dev.sh"},
+				"python": {From: "dev", SetupScript: "mcp:bases/python.sh"},
+			},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var built []string
+	build := func(name string) error {
+		built = append(built, name)
+		return nil
+	}
+	err := BuildChain(ctx, cfg, "python", func(string) bool { return false }, build)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+	if len(built) != 0 {
+		t.Errorf("built = %v, want none (loop should bail before first build)", built)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
