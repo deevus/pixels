@@ -145,6 +145,9 @@ func TestStop(t *testing.T) {
 	var stopCalled bool
 	tn := newTestBackend(t, &Client{
 		Virt: &tnapi.MockVirtService{
+			GetInstanceFunc: func(ctx context.Context, name string) (*tnapi.VirtInstance, error) {
+				return &tnapi.VirtInstance{Name: name, Status: "RUNNING"}, nil
+			},
 			StopInstanceFunc: func(ctx context.Context, name string, opts tnapi.StopVirtInstanceOpts) error {
 				stopCalled = true
 				if name != "px-test" {

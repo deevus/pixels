@@ -115,7 +115,7 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 				t.warnf("provision %s: %v", name, err)
 			} else if pubKey != "" {
 				// Restart so rc.local runs on boot.
-				_ = t.client.Virt.StopInstance(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30})
+				_ = t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30})
 				if err := t.client.Virt.StartInstance(ctx, full); err != nil {
 					return nil, fmt.Errorf("restarting after provision: %w", err)
 				}
@@ -199,9 +199,9 @@ func (t *TrueNAS) Start(ctx context.Context, name string) error {
 	return nil
 }
 
-// Stop stops a running instance.
+// Stop stops a running instance. No-ops if the instance is already stopped.
 func (t *TrueNAS) Stop(ctx context.Context, name string) error {
-	if err := t.client.Virt.StopInstance(ctx, prefixed(name), tnapi.StopVirtInstanceOpts{
+	if err := t.client.StopInstanceIfRunning(ctx, prefixed(name), tnapi.StopVirtInstanceOpts{
 		Timeout: 30,
 	}); err != nil {
 		return fmt.Errorf("stopping %s: %w", name, err)
@@ -214,7 +214,7 @@ func (t *TrueNAS) Delete(ctx context.Context, name string) error {
 	full := prefixed(name)
 
 	// Best-effort stop.
-	_ = t.client.Virt.StopInstance(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30})
+	_ = t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30})
 
 	// Resolve IP before deletion so we can clean up the known_hosts entry.
 	inst, _ := t.client.Virt.GetInstance(ctx, full)
@@ -296,7 +296,7 @@ func (t *TrueNAS) RestoreSnapshot(ctx context.Context, name, label string) error
 		return err
 	}
 
-	if err := t.client.Virt.StopInstance(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30}); err != nil {
+	if err := t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30}); err != nil {
 		return fmt.Errorf("stopping %s: %w", name, err)
 	}
 	if err := t.client.SnapshotRollback(ctx, ds+"@"+label); err != nil {
@@ -319,12 +319,59 @@ func (t *TrueNAS) RestoreSnapshot(ctx context.Context, name, label string) error
 }
 
 // CloneFrom clones a source container's snapshot into a new container.
+// CloneFrom creates newName as an independent copy of source@label.
 func (t *TrueNAS) CloneFrom(ctx context.Context, source, label, newName string) error {
+	// Get source instance to copy its resource limits.
+	src, err := t.client.Virt.GetInstance(ctx, prefixed(source))
+	if err != nil {
+		return fmt.Errorf("getting source %s: %w", source, err)
+	}
+
+	// Create a bare container with matching resource limits.
+	createOpts := CreateInstanceOpts{
+		Name:      prefixed(newName),
+		Image:     t.cfg.image, // irrelevant; rootfs gets replaced
+		CPU:       src.CPU,
+		Memory:    src.Memory,
+		Autostart: false,
+	}
+	if t.cfg.nicType != "" {
+		createOpts.NIC = &NICOpts{
+			NICType: strings.ToUpper(t.cfg.nicType),
+			Parent:  t.cfg.parent,
+		}
+	} else {
+		nic, err := t.client.DefaultNIC(ctx)
+		if err == nil {
+			createOpts.NIC = nic
+		}
+	}
+
+	if _, err := t.client.CreateInstance(ctx, createOpts); err != nil {
+		return fmt.Errorf("creating clone shell: %w", err)
+	}
+
+	// Defensive stop in case the shell ended up running (Autostart=false should
+	// keep it stopped, but the helper makes it a no-op either way).
+	if err := t.client.StopInstanceIfRunning(ctx, prefixed(newName), tnapi.StopVirtInstanceOpts{Timeout: 30}); err != nil {
+		return fmt.Errorf("stopping clone shell: %w", err)
+	}
+
+	// Replace root filesystem with a ZFS clone of the snapshot.
 	ds, err := t.resolveDataset(ctx, source)
 	if err != nil {
 		return err
 	}
-	return t.client.ReplaceContainerRootfs(ctx, prefixed(newName), ds+"@"+label)
+	if err := t.client.ReplaceContainerRootfs(ctx, prefixed(newName), ds+"@"+label); err != nil {
+		return fmt.Errorf("replacing rootfs: %w", err)
+	}
+
+	// Start the clone.
+	if err := t.client.Virt.StartInstance(ctx, prefixed(newName)); err != nil {
+		return fmt.Errorf("starting clone: %w", err)
+	}
+
+	return nil
 }
 
 // resolveDataset returns the ZFS dataset path for an instance.
