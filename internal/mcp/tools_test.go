@@ -725,6 +725,74 @@ func TestDeleteFileRemoves(t *testing.T) {
 	}
 }
 
+func TestListSandboxesReconcilesFailedToRunning(t *testing.T) {
+	tt, fb := newTestTools(t)
+	// State says failed; backend says container is RUNNING with an IP.
+	// list_sandboxes should reconcile and report running.
+	tt.State.Add(Sandbox{Name: "mcp-recovered", Status: "failed", Error: "ready: no IP address for mcp-recovered"})
+	fb.containers = map[string]sandbox.Instance{
+		"mcp-recovered": {Name: "mcp-recovered", Status: sandbox.StatusRunning, Addresses: []string{"192.168.1.108"}},
+	}
+
+	out, err := tt.ListSandboxes(context.Background(), EmptyIn{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Sandboxes) != 1 {
+		t.Fatalf("got %d sandboxes, want 1", len(out.Sandboxes))
+	}
+	got := out.Sandboxes[0]
+	if got.Status != "running" {
+		t.Errorf("Status = %q, want running", got.Status)
+	}
+	if got.IP != "192.168.1.108" {
+		t.Errorf("IP = %q, want 192.168.1.108", got.IP)
+	}
+	if got.Error != "" {
+		t.Errorf("Error = %q, want empty after recovery", got.Error)
+	}
+}
+
+func TestListSandboxesCachesBackendQueries(t *testing.T) {
+	tt, fb := newTestTools(t)
+	tt.State.Add(Sandbox{Name: "mcp-x", Status: "running"})
+	fb.containers = map[string]sandbox.Instance{
+		"mcp-x": {Name: "mcp-x", Status: sandbox.StatusRunning, Addresses: []string{"10.0.0.1"}},
+	}
+
+	// First call populates the cache.
+	if _, err := tt.ListSandboxes(context.Background(), EmptyIn{}); err != nil {
+		t.Fatal(err)
+	}
+	// Mutate backend in a way that would change reconciled status.
+	fb.mu.Lock()
+	fb.containers["mcp-x"] = sandbox.Instance{Name: "mcp-x", Status: sandbox.StatusStopped}
+	fb.mu.Unlock()
+
+	// Within the TTL window, the second call should still see "running"
+	// because reconciliation is cached.
+	out, err := tt.ListSandboxes(context.Background(), EmptyIn{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Sandboxes[0].Status != "running" {
+		t.Errorf("Status = %q, want running (cached)", out.Sandboxes[0].Status)
+	}
+
+	// Force the cache to expire and call again — now it should reconcile.
+	tt.reconcileMu.Lock()
+	tt.lastSync = time.Now().Add(-time.Hour)
+	tt.reconcileMu.Unlock()
+
+	out, err = tt.ListSandboxes(context.Background(), EmptyIn{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Sandboxes[0].Status != "stopped" {
+		t.Errorf("Status = %q, want stopped (after cache expiry)", out.Sandboxes[0].Status)
+	}
+}
+
 func TestDestroySandboxRemovesGhostState(t *testing.T) {
 	tt, be := newTestTools(t)
 	// Pre-seed a state record without a corresponding backend instance — a ghost.

@@ -32,7 +32,18 @@ type Tools struct {
 	Builder         *Builder
 	BuildLockDir    string
 	provisionWG     sync.WaitGroup // test affordance: tracks in-flight provisioning goroutines
+
+	// reconcileTTL controls how often ListSandboxes reconciles in-memory state
+	// against backend reality. Zero defaults to reconcileDefaultTTL.
+	reconcileTTL time.Duration
+	reconcileMu  sync.Mutex
+	lastSync     time.Time
 }
+
+// reconcileDefaultTTL is how often ListSandboxes will query the backend to
+// reconcile state. Bursty callers within the window read cached state; after
+// the window, the next caller pays one round-trip.
+const reconcileDefaultTTL = 15 * time.Second
 
 // WaitProvisioning blocks until all in-flight provisioning goroutines complete.
 // Used by the daemon shutdown path so final State writes (MarkRunning /
@@ -365,6 +376,7 @@ func (t *Tools) StartSandbox(ctx context.Context, in SandboxRef) (CreateSandboxO
 type EmptyIn struct{}
 
 func (t *Tools) ListSandboxes(ctx context.Context, _ EmptyIn) (ListSandboxesOut, error) {
+	t.reconcileWithBackend(ctx)
 	now := time.Now().UTC()
 	in := t.State.Sandboxes()
 	out := make([]SandboxView, 0, len(in))
@@ -382,6 +394,63 @@ func (t *Tools) ListSandboxes(ctx context.Context, _ EmptyIn) (ListSandboxesOut,
 		})
 	}
 	return ListSandboxesOut{Sandboxes: out}, nil
+}
+
+// reconcileWithBackend updates in-memory state from backend reality, no-op if
+// the last reconcile is fresher than reconcileTTL. Failures from individual
+// Backend.Get calls are silently ignored — reconciliation is best-effort and
+// must not interfere with returning the cached snapshot.
+//
+// Transitions handled:
+//   - "failed" sandbox whose backend container is RUNNING with an IP → flip
+//     to "running", clear the error. Recovers the slow-DHCP race where Ready
+//     gave up before the IP appeared.
+//   - "running" sandbox whose backend container is STOPPED → flip to "stopped".
+//   - "stopped" sandbox whose backend container is RUNNING → flip to "running".
+//   - State record whose backend container is gone (ErrNotFound) → leave alone;
+//     the next destroy_sandbox call will clean up the ghost.
+func (t *Tools) reconcileWithBackend(ctx context.Context) {
+	ttl := t.reconcileTTL
+	if ttl == 0 {
+		ttl = reconcileDefaultTTL
+	}
+	t.reconcileMu.Lock()
+	if time.Since(t.lastSync) < ttl {
+		t.reconcileMu.Unlock()
+		return
+	}
+	t.lastSync = time.Now()
+	t.reconcileMu.Unlock()
+
+	dirty := false
+	for _, sb := range t.State.Sandboxes() {
+		inst, err := t.Backend.Get(ctx, sb.Name)
+		if err != nil {
+			// Missing or transient: leave state alone.
+			continue
+		}
+		ip := ""
+		if len(inst.Addresses) > 0 {
+			ip = inst.Addresses[0]
+		}
+
+		switch {
+		case inst.Status == sandbox.StatusRunning && ip != "":
+			if sb.Status != "running" || sb.IP != ip {
+				t.State.MarkRunning(sb.Name)
+				t.State.SetIP(sb.Name, ip)
+				dirty = true
+			}
+		case inst.Status == sandbox.StatusStopped:
+			if sb.Status != "stopped" {
+				t.State.SetStatus(sb.Name, "stopped")
+				dirty = true
+			}
+		}
+	}
+	if dirty {
+		_ = t.persist()
+	}
 }
 
 // --- ListBases handler ---
