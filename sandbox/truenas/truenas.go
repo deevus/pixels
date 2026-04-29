@@ -27,9 +27,6 @@ type TrueNAS struct {
 	cfg    *tnConfig
 	ssh    sshRunner
 	warn   io.Writer
-
-	// Embedded helper provides WriteFile/ReadFile/ListFiles/DeleteFile via Run.
-	sandbox.FilesViaExec
 }
 
 func (t *TrueNAS) warnf(format string, a ...any) {
@@ -56,7 +53,6 @@ func New(cfg map[string]string) (*TrueNAS, error) {
 		ssh:    realSSH{},
 		warn:   os.Stderr,
 	}
-	t.FilesViaExec = sandbox.FilesViaExec{Exec: t}
 	return t, nil
 }
 
@@ -72,7 +68,6 @@ func NewForTest(client *Client, ssh sshRunner, cfg map[string]string) (*TrueNAS,
 		ssh:    ssh,
 		warn:   os.Stderr,
 	}
-	t.FilesViaExec = sandbox.FilesViaExec{Exec: t}
 	return t, nil
 }
 
@@ -86,9 +81,8 @@ func (t *TrueNAS) Capabilities() sandbox.Capabilities {
 }
 
 // WriteFile writes content to a file inside the container via the TrueNAS
-// filesystem API (no SSH required). Overrides the embedded FilesViaExec.WriteFile
-// so file uploads work even before SSH provisioning has set up authorized_keys
-// (e.g. during BuildBase).
+// filesystem API (no SSH required) so uploads work even before SSH
+// provisioning has set up authorized_keys (e.g. during BuildBase).
 //
 // The TrueNAS filesystem API writes as root. When uid/gid are non-negative,
 // the file is chowned to uid:gid via SSH-as-root after the write so callers
