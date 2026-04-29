@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 )
@@ -16,20 +18,20 @@ type Sandbox struct {
 	Name           string    `json:"name"`
 	Label          string    `json:"label,omitempty"`
 	Image          string    `json:"image"`
-	Base           string    `json:"base,omitempty"`            // name of the base, if cloned
+	Base           string    `json:"base,omitempty"` // name of the base, if cloned
 	IP             string    `json:"ip,omitempty"`
-	Status         string    `json:"status"` // "provisioning" | "running" | "stopped" | "failed"
-	Error          string    `json:"error,omitempty"`           // populated when status=failed
+	Status         string    `json:"status"`          // "provisioning" | "running" | "stopped" | "failed"
+	Error          string    `json:"error,omitempty"` // populated when status=failed
 	CreatedAt      time.Time `json:"created_at"`
 	LastActivityAt time.Time `json:"last_activity_at"`
 }
 
 // State is the in-memory + on-disk MCP state.
 type State struct {
-	path string
-	mu   sync.RWMutex
-	data stateData
-	log  *slog.Logger
+	path      string
+	mu        sync.RWMutex
+	sandboxes map[string]Sandbox
+	log       *slog.Logger
 }
 
 // SetLogger assigns the logger after construction. Call once at startup.
@@ -38,13 +40,14 @@ func (s *State) SetLogger(l *slog.Logger) { s.log = l }
 // SetPathForTest sets the state file path for testing only.
 func (s *State) SetPathForTest(p string) { s.path = p }
 
+// stateData is the on-disk JSON wire format.
 type stateData struct {
 	Sandboxes []Sandbox `json:"sandboxes"`
 }
 
 // LoadState reads state from path. Missing or corrupt files yield an empty state.
 func LoadState(path string) (*State, error) {
-	s := &State{path: path}
+	s := &State{path: path, sandboxes: make(map[string]Sandbox)}
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
@@ -52,131 +55,100 @@ func LoadState(path string) (*State, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading state: %w", err)
 	}
-	if err := json.Unmarshal(b, &s.data); err != nil {
+	var data stateData
+	if err := json.Unmarshal(b, &data); err != nil {
 		fmt.Fprintf(os.Stderr, "pixels mcp: state file corrupt, starting empty: %v\n", err)
-		s.data = stateData{}
+		return s, nil
+	}
+	for _, sb := range data.Sandboxes {
+		s.sandboxes[sb.Name] = sb
 	}
 	return s, nil
 }
 
-// Sandboxes returns a copy of the current sandbox slice.
+// Sandboxes returns a copy of the current sandboxes. Order is undefined.
 func (s *State) Sandboxes() []Sandbox {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]Sandbox, len(s.data.Sandboxes))
-	copy(out, s.data.Sandboxes)
-	return out
+	return slices.Collect(maps.Values(s.sandboxes))
 }
 
 // Get returns a sandbox by name and whether it was found.
 func (s *State) Get(name string) (Sandbox, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, sb := range s.data.Sandboxes {
-		if sb.Name == name {
-			return sb, true
-		}
-	}
-	return Sandbox{}, false
+	sb, ok := s.sandboxes[name]
+	return sb, ok
 }
 
 // Add inserts or replaces a sandbox.
 func (s *State) Add(sb Sandbox) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, existing := range s.data.Sandboxes {
-		if existing.Name == sb.Name {
-			s.data.Sandboxes[i] = sb
-			return
-		}
-	}
-	s.data.Sandboxes = append(s.data.Sandboxes, sb)
+	s.sandboxes[sb.Name] = sb
 }
 
 // Remove deletes a sandbox by name. No-op if not present.
 func (s *State) Remove(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := s.data.Sandboxes[:0]
-	for _, sb := range s.data.Sandboxes {
-		if sb.Name != name {
-			out = append(out, sb)
-		}
+	delete(s.sandboxes, name)
+}
+
+// update applies fn to the named sandbox under the write lock. No-op if missing.
+func (s *State) update(name string, fn func(*Sandbox)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sb, ok := s.sandboxes[name]
+	if !ok {
+		return
 	}
-	s.data.Sandboxes = out
+	fn(&sb)
+	s.sandboxes[name] = sb
 }
 
 // BumpActivity advances last_activity_at for the given sandbox. No-op if missing.
 func (s *State) BumpActivity(name string, t time.Time) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.data.Sandboxes {
-		if s.data.Sandboxes[i].Name == name {
-			s.data.Sandboxes[i].LastActivityAt = t
-			return
-		}
-	}
+	s.update(name, func(sb *Sandbox) { sb.LastActivityAt = t })
 }
 
 // MarkRunning transitions a sandbox to "running" and clears any prior error.
 func (s *State) MarkRunning(name string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.data.Sandboxes {
-		if s.data.Sandboxes[i].Name == name {
-			s.data.Sandboxes[i].Status = "running"
-			s.data.Sandboxes[i].Error = ""
-			return
-		}
-	}
+	s.update(name, func(sb *Sandbox) {
+		sb.Status = "running"
+		sb.Error = ""
+	})
 }
 
 // SetIP updates a sandbox's IP address. No-op if missing.
 func (s *State) SetIP(name, ip string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.data.Sandboxes {
-		if s.data.Sandboxes[i].Name == name {
-			s.data.Sandboxes[i].IP = ip
-			return
-		}
-	}
+	s.update(name, func(sb *Sandbox) { sb.IP = ip })
 }
 
 // MarkFailed transitions a sandbox to "failed" and records the error message.
 func (s *State) MarkFailed(name string, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.data.Sandboxes {
-		if s.data.Sandboxes[i].Name == name {
-			s.data.Sandboxes[i].Status = "failed"
-			if err != nil {
-				s.data.Sandboxes[i].Error = err.Error()
-			}
-			return
+	s.update(name, func(sb *Sandbox) {
+		sb.Status = "failed"
+		if err != nil {
+			sb.Error = err.Error()
 		}
-	}
+	})
 }
 
 // SetStatus updates a sandbox's status. No-op if missing.
 func (s *State) SetStatus(name, status string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.data.Sandboxes {
-		if s.data.Sandboxes[i].Name == name {
-			s.data.Sandboxes[i].Status = status
-			return
-		}
-	}
+	s.update(name, func(sb *Sandbox) { sb.Status = status })
 }
 
 // Save persists state atomically: write to <path>.tmp with fsync, then rename.
 // Without the fsync, a crash after rename can leave state.json zero-length on
-// ext4/xfs default mount options.
+// ext4/xfs default mount options. On-disk sandbox order is non-deterministic
+// across saves (map iteration order).
 func (s *State) Save() error {
 	s.mu.RLock()
-	b, err := json.MarshalIndent(s.data, "", "  ")
+	data := stateData{Sandboxes: slices.Collect(maps.Values(s.sandboxes))}
 	s.mu.RUnlock()
+	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal state: %w", err)
 	}
