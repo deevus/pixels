@@ -18,6 +18,7 @@ import (
 
 	"github.com/deevus/pixels/internal/config"
 	"github.com/deevus/pixels/sandbox"
+	"github.com/deevus/pixels/sandbox/user"
 )
 
 // Tools is the dependency bundle every MCP handler closes over.
@@ -189,17 +190,6 @@ func (t *Tools) requireSandbox(name string) (Sandbox, error) {
 	}
 	return sb, nil
 }
-
-// pixelUID/pixelGID is the unprivileged sandbox user that MCP file operations
-// write as. Files written by the MCP write_file tool are chowned to this
-// owner so subsequent exec calls (which also run as this user) can read and
-// modify them. Hardcoded to match the convention established by the
-// provisioning scripts (rc.local creates `pixel` at uid 1000); MCP cannot
-// write root-owned files by design.
-const (
-	pixelUID = 1000
-	pixelGID = 1000
-)
 
 // editFileMaxBytes caps the in-memory read for EditFile. Editing past this
 // would silently truncate the rest of the file on write-back.
@@ -628,7 +618,7 @@ func (t *Tools) WriteFile(ctx context.Context, in WriteFileIn) (WriteFileOut, er
 	}
 	defer t.Locks.Acquire(sb.Name)()
 
-	if err := t.Backend.WriteFile(ctx, sb.Name, in.Path, []byte(in.Content), mode, pixelUID, pixelGID); err != nil {
+	if err := t.Backend.WriteFile(ctx, sb.Name, in.Path, []byte(in.Content), mode, user.UID, user.GID); err != nil {
 		return WriteFileOut{}, err
 	}
 	t.touch(sb.Name)
@@ -710,7 +700,7 @@ func (t *Tools) EditFile(ctx context.Context, in EditFileIn) (EditFileOut, error
 		updated = strings.Replace(original, in.OldString, in.NewString, 1)
 	}
 
-	if err := t.Backend.WriteFile(ctx, sb.Name, in.Path, []byte(updated), 0o644, pixelUID, pixelGID); err != nil {
+	if err := t.Backend.WriteFile(ctx, sb.Name, in.Path, []byte(updated), 0o644, user.UID, user.GID); err != nil {
 		return EditFileOut{}, fmt.Errorf("write: %w", err)
 	}
 	t.touch(sb.Name)

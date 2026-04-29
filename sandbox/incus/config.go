@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/deevus/pixels/sandbox/user"
 )
 
 // incusCfg holds parsed backend configuration.
@@ -51,8 +53,8 @@ func parseCfg(m map[string]string) (*incusCfg, error) {
 		pool:        "default",
 		sshUser:     "pixel",
 		sshKey:      "~/.ssh/id_ed25519",
-		uid:         1000,
-		gid:         1000,
+		uid:         user.UID,
+		gid:         user.GID,
 		provision:   true,
 		devtools:    true,
 		egress:      "unrestricted",

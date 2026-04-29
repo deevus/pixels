@@ -14,6 +14,7 @@ import (
 
 	"github.com/deevus/pixels/internal/config"
 	"github.com/deevus/pixels/sandbox"
+	"github.com/deevus/pixels/sandbox/user"
 )
 
 type cloneRecord struct {
@@ -926,7 +927,7 @@ func TestWriteFileChownsToPixel(t *testing.T) {
 	if !ok {
 		t.Fatal("WriteFile must request explicit ownership for MCP tools")
 	}
-	if want := [2]int{pixelUID, pixelGID}; got != want {
+	if want := [2]int{user.UID, user.GID}; got != want {
 		t.Errorf("owner = %v, want %v (MCP must always write as the pixel user)", got, want)
 	}
 }
@@ -948,7 +949,7 @@ func TestEditFileChownsToPixel(t *testing.T) {
 	if !ok {
 		t.Fatal("EditFile must request explicit ownership when writing back")
 	}
-	if want := [2]int{pixelUID, pixelGID}; got != want {
+	if want := [2]int{user.UID, user.GID}; got != want {
 		t.Errorf("owner = %v, want %v", got, want)
 	}
 }

@@ -237,7 +237,7 @@ func TestProvision(t *testing.T) {
 				DevTools:  true,
 			},
 			pool:      "tank",
-			wantCalls: 8, // dns + sshd config + profile.d + env + root key + pixel key + setup script + rc.local
+			wantCalls: 9, // dns + sshd config + profile.d + env + root key + pixel key + mise.toml + setup script + rc.local
 			check: func(t *testing.T, calls []fsWriteCall) {
 				paths := make(map[string]fsWriteCall)
 				for _, c := range calls {
@@ -256,9 +256,17 @@ func TestProvision(t *testing.T) {
 				if setup.mode != 0o755 {
 					t.Errorf("setup script mode = %o, want 755", setup.mode)
 				}
-				for _, want := range []string{"mise", "claude-code", "opencode", "codex", "su - pixel"} {
+				for _, want := range []string{"mise install", "su - pixel"} {
 					if !strings.Contains(setup.content, want) {
 						t.Errorf("setup script missing %q", want)
+					}
+				}
+
+				// mise.toml lists the tools mise install will pull in.
+				mise := paths[rootfs+"/home/pixel/.config/mise/config.toml"]
+				for _, want := range []string{"claude-code", "opencode", "codex"} {
+					if !strings.Contains(mise.content, want) {
+						t.Errorf("mise.toml missing %q", want)
 					}
 				}
 
