@@ -80,32 +80,6 @@ func (t *TrueNAS) Capabilities() sandbox.Capabilities {
 	}
 }
 
-// WriteFile writes content to a file inside the container via the TrueNAS
-// filesystem API (no SSH required) so uploads work even before SSH
-// provisioning has set up authorized_keys (e.g. during BuildBase).
-//
-// The TrueNAS filesystem API writes as root. When uid/gid are non-negative,
-// the file is chowned to uid:gid via SSH-as-root after the write so callers
-// (notably the MCP layer) can produce files owned by the configured exec
-// user. uid<0 or gid<0 leaves the file root-owned, matching the historical
-// BuildBase behaviour.
-func (t *TrueNAS) WriteFile(ctx context.Context, name, path string, content []byte, mode os.FileMode, uid, gid int) error {
-	if err := t.client.WriteContainerFile(ctx, prefixed(name), path, content, mode); err != nil {
-		return err
-	}
-	if uid < 0 || gid < 0 {
-		return nil
-	}
-	owner := fmt.Sprintf("%d:%d", uid, gid)
-	if _, err := t.Run(ctx, name, sandbox.ExecOpts{
-		Cmd:  []string{"chown", "--", owner, path},
-		Root: true,
-	}); err != nil {
-		return fmt.Errorf("chown %s to %s: %w", path, owner, err)
-	}
-	return nil
-}
-
 // Close closes the underlying TrueNAS WebSocket connection.
 func (t *TrueNAS) Close() error {
 	return t.client.Close()
