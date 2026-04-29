@@ -23,6 +23,25 @@ func TestSandboxLocksReturnsDistinctMutexForDifferentNames(t *testing.T) {
 	}
 }
 
+func TestSandboxLocksAcquireLocksAndReturnsUnlock(t *testing.T) {
+	l := &SandboxLocks{}
+	unlock := l.Acquire("alpha")
+
+	// While Acquire holds the lock, TryLock on the same mutex must fail.
+	if l.For("alpha").TryLock() {
+		t.Fatal("expected mutex to be locked by Acquire")
+	}
+
+	unlock()
+
+	// Returned closure released the lock; TryLock should now succeed.
+	m := l.For("alpha")
+	if !m.TryLock() {
+		t.Fatal("expected mutex to be unlocked after calling returned closure")
+	}
+	m.Unlock()
+}
+
 func TestSandboxLocksConcurrentAccessNoRace(t *testing.T) {
 	l := &SandboxLocks{}
 	var wg sync.WaitGroup

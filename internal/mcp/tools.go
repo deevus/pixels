@@ -569,9 +569,7 @@ func (t *Tools) Exec(ctx context.Context, in ExecIn) (ExecOut, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	mu := t.Locks.For(sb.Name)
-	mu.Lock()
-	defer mu.Unlock()
+	defer t.Locks.Acquire(sb.Name)()
 
 	// Wrap the command in `env [-C cwd] [KEY=val ...] -- <command>` so cwd and
 	// env take effect regardless of how the backend handles ExecOpts.Env.
@@ -620,9 +618,7 @@ func (t *Tools) WriteFile(ctx context.Context, in WriteFileIn) (WriteFileOut, er
 	if err != nil {
 		return WriteFileOut{}, err
 	}
-	mu := t.Locks.For(sb.Name)
-	mu.Lock()
-	defer mu.Unlock()
+	defer t.Locks.Acquire(sb.Name)()
 
 	if err := t.Backend.WriteFile(ctx, sb.Name, in.Path, []byte(in.Content), mode, pixelUID, pixelGID); err != nil {
 		return WriteFileOut{}, err
@@ -636,9 +632,7 @@ func (t *Tools) ReadFile(ctx context.Context, in ReadFileIn) (ReadFileOut, error
 	if err != nil {
 		return ReadFileOut{}, err
 	}
-	mu := t.Locks.For(sb.Name)
-	mu.Lock()
-	defer mu.Unlock()
+	defer t.Locks.Acquire(sb.Name)()
 
 	maxBytes := in.MaxBytes
 	if maxBytes <= 0 {
@@ -659,9 +653,7 @@ func (t *Tools) ListFiles(ctx context.Context, in ListFilesIn) (ListFilesOut, er
 	if err != nil {
 		return ListFilesOut{}, err
 	}
-	mu := t.Locks.For(sb.Name)
-	mu.Lock()
-	defer mu.Unlock()
+	defer t.Locks.Acquire(sb.Name)()
 
 	entries, err := t.Backend.ListFiles(ctx, sb.Name, in.Path, in.Recursive)
 	if err != nil {
@@ -685,9 +677,7 @@ func (t *Tools) EditFile(ctx context.Context, in EditFileIn) (EditFileOut, error
 	if err != nil {
 		return EditFileOut{}, err
 	}
-	mu := t.Locks.For(sb.Name)
-	mu.Lock()
-	defer mu.Unlock()
+	defer t.Locks.Acquire(sb.Name)()
 
 	body, truncated, err := t.Backend.ReadFile(ctx, sb.Name, in.Path, editFileMaxBytes)
 	if err != nil {
@@ -724,9 +714,7 @@ func (t *Tools) DeleteFile(ctx context.Context, in DeleteFileIn) (Ack, error) {
 	if err != nil {
 		return Ack{}, err
 	}
-	mu := t.Locks.For(sb.Name)
-	mu.Lock()
-	defer mu.Unlock()
+	defer t.Locks.Acquire(sb.Name)()
 	if err := t.Backend.DeleteFile(ctx, sb.Name, in.Path); err != nil {
 		return Ack{}, err
 	}

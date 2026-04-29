@@ -31,3 +31,12 @@ func (l *SandboxLocks) For(name string) *sync.Mutex {
 	}
 	return m
 }
+
+// Acquire locks the sandbox's mutex and returns its Unlock function, intended
+// for the idiom `defer t.Locks.Acquire(name)()` in handlers that hold the lock
+// for the entire call.
+func (l *SandboxLocks) Acquire(name string) func() {
+	m := l.For(name)
+	m.Lock()
+	return m.Unlock
+}
