@@ -509,8 +509,14 @@ func TestCreateSandboxReturnsImmediatelyWithProvisioning(t *testing.T) {
 
 func TestCreateSandboxPropagatesSaveError(t *testing.T) {
 	tt, be := newTestTools(t)
-	// Force Save() to fail by using an unwritable path.
-	tt.State.SetPathForTest("/nonexistent/dir/state.json")
+	// Force Save() to fail: place the state file under a regular file so
+	// MkdirAll on the parent fails. Survives rootful CI runners where a
+	// path like /nonexistent/dir would just get created.
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tt.State.SetPathForTest(filepath.Join(blocker, "state.json"))
 
 	_, err := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
 	if err == nil {
