@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/renameio/v2"
+	"github.com/google/renameio/v2/maybe"
 )
 
 // Sandbox is a single tracked MCP-managed sandbox.
@@ -142,9 +142,10 @@ func (s *State) SetStatus(name, status string) {
 	s.update(name, func(sb *Sandbox) { sb.Status = status })
 }
 
-// Save persists state atomically via renameio: a crash mid-save leaves either
-// the previous contents or the new contents, never zero-length. On-disk
-// sandbox order is non-deterministic across saves (map iteration order).
+// Save persists state via renameio's maybe.WriteFile: atomic on Unix (a crash
+// mid-save leaves either the previous or new contents, never zero-length) and
+// best-effort on Windows. On-disk sandbox order is non-deterministic across
+// saves (map iteration order).
 func (s *State) Save() error {
 	s.mu.RLock()
 	data := stateData{Sandboxes: slices.Collect(maps.Values(s.sandboxes))}
@@ -158,7 +159,7 @@ func (s *State) Save() error {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 
-	if err := renameio.WriteFile(s.path, b, 0o600); err != nil {
+	if err := maybe.WriteFile(s.path, b, 0o600); err != nil {
 		return fmt.Errorf("write state: %w", err)
 	}
 	return nil
