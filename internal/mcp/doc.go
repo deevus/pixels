@@ -8,7 +8,7 @@
 //
 //	 1. SandboxLocks.For(name)  — long-held; per-sandbox container ops, including the
 //	                               provisioning goroutine and clone-from-base path.
-//	 2. Builder.mu              — short-held; protects build state map + failure cache.
+//	 2. Builder.mu              — short-held; protects in-flight tracking + failure cache.
 //	 3. State.mu                — short-held; protects in-memory state. NEVER held
 //	                               across backend I/O.
 //
@@ -25,8 +25,8 @@
 //	  - The provisioning goroutine acquires SandboxLocks.For(newName) ITSELF
 //	    (does not inherit a held lock from the request goroutine), and re-checks
 //	    state at the top to handle the destroy-during-create race window.
-//	  - Builder.Build dedupes concurrent in-process callers via a buildState map;
+//	  - Builder.Build dedupes concurrent in-process callers via singleflight.Group;
 //	    cross-process serialization is via BuildLock (flock) inside DoBuild.
-//	  - Builder.DoBuild's lock is acquired INSIDE the singleflight-equivalent —
+//	  - Builder.DoBuild's lock is acquired INSIDE the singleflight call —
 //	    so only one in-process goroutine ever holds the file lock at a time.
 package mcp

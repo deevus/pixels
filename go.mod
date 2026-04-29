@@ -15,6 +15,7 @@ require (
 	github.com/lxc/incus/v6 v6.22.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/sync v0.20.0
 	golang.org/x/term v0.40.0
 )
 

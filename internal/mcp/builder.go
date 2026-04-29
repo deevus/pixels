@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // Builder coordinates concurrent in-process builds of named bases. It
@@ -21,14 +23,11 @@ type Builder struct {
 	// Zero means failures aren't cached.
 	FailureTTL time.Duration
 
-	mu       sync.Mutex
-	builds   map[string]*buildState
-	failures map[string]failureEntry
-}
+	group singleflight.Group
 
-type buildState struct {
-	done chan struct{}
-	err  error
+	mu       sync.Mutex
+	inflight map[string]struct{}
+	failures map[string]failureEntry
 }
 
 type failureEntry struct {
@@ -40,57 +39,52 @@ type failureEntry struct {
 // name share a single DoBuild invocation; the result is delivered to all.
 func (b *Builder) Build(ctx context.Context, name string) error {
 	b.mu.Lock()
-	if b.builds == nil {
-		b.builds = make(map[string]*buildState)
-	}
-	if b.failures == nil {
-		b.failures = make(map[string]failureEntry)
-	}
-
 	if fe, ok := b.failures[name]; ok && time.Now().Before(fe.until) {
 		b.mu.Unlock()
 		return fe.err
 	}
+	if b.inflight == nil {
+		b.inflight = make(map[string]struct{})
+	}
+	b.inflight[name] = struct{}{}
+	b.mu.Unlock()
 
-	if bs, ok := b.builds[name]; ok {
-		b.mu.Unlock()
-		select {
-		case <-bs.done:
-			return bs.err
-		case <-ctx.Done():
-			return ctx.Err()
+	ch := b.group.DoChan(name, func() (interface{}, error) {
+		err := b.DoBuild(ctx, name)
+
+		b.mu.Lock()
+		delete(b.inflight, name)
+		if err != nil && b.FailureTTL > 0 {
+			if b.failures == nil {
+				b.failures = make(map[string]failureEntry)
+			}
+			b.failures[name] = failureEntry{err: err, until: time.Now().Add(b.FailureTTL)}
+		} else {
+			delete(b.failures, name)
 		}
+		b.mu.Unlock()
+
+		return nil, err
+	})
+
+	select {
+	case r := <-ch:
+		return r.Err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-
-	bs := &buildState{done: make(chan struct{})}
-	b.builds[name] = bs
-	b.mu.Unlock()
-
-	err := b.DoBuild(ctx, name)
-
-	b.mu.Lock()
-	bs.err = err
-	delete(b.builds, name)
-	if err != nil && b.FailureTTL > 0 {
-		b.failures[name] = failureEntry{err: err, until: time.Now().Add(b.FailureTTL)}
-	} else {
-		delete(b.failures, name)
-	}
-	b.mu.Unlock()
-
-	close(bs.done)
-	return err
 }
 
 // Status returns the current state for name:
-//   "building" — a DoBuild is in flight
-//   "failed"   — a recent build failed and is still cached; err is non-nil
-//   ""         — neither in flight nor cached; caller checks snapshot existence
-//                to distinguish "ready" from "missing"
+//
+//	"building" — a DoBuild is in flight
+//	"failed"   — a recent build failed and is still cached; err is non-nil
+//	""         — neither in flight nor cached; caller checks snapshot existence
+//	             to distinguish "ready" from "missing"
 func (b *Builder) Status(name string) (status string, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, ok := b.builds[name]; ok {
+	if _, ok := b.inflight[name]; ok {
 		return "building", nil
 	}
 	if fe, ok := b.failures[name]; ok && time.Now().Before(fe.until) {
