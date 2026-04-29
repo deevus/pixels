@@ -67,6 +67,13 @@ func (t *Tools) persist() error {
 	return nil
 }
 
+// touch bumps the sandbox's last-activity timestamp and persists state,
+// swallowing any save error (already logged by persist).
+func (t *Tools) touch(name string) {
+	t.State.BumpActivity(name, time.Now().UTC())
+	_ = t.persist()
+}
+
 
 
 // --- Input/output types ---
@@ -349,8 +356,7 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 		t.State.SetIP(name, inst.Addresses[0])
 	}
 	t.State.MarkRunning(name)
-	t.State.BumpActivity(name, time.Now().UTC())
-	_ = t.persist()
+	t.touch(name)
 }
 
 
@@ -589,8 +595,7 @@ func (t *Tools) Exec(ctx context.Context, in ExecIn) (ExecOut, error) {
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
-	t.State.BumpActivity(sb.Name, time.Now().UTC())
-	_ = t.persist()
+	t.touch(sb.Name)
 
 	out := ExecOut{
 		ExitCode: exit,
@@ -621,8 +626,7 @@ func (t *Tools) WriteFile(ctx context.Context, in WriteFileIn) (WriteFileOut, er
 	if err := t.Backend.WriteFile(ctx, sb.Name, in.Path, []byte(in.Content), mode, pixelUID, pixelGID); err != nil {
 		return WriteFileOut{}, err
 	}
-	t.State.BumpActivity(sb.Name, time.Now().UTC())
-	_ = t.persist()
+	t.touch(sb.Name)
 	return WriteFileOut{OK: true, BytesWritten: len(in.Content)}, nil
 }
 
@@ -645,8 +649,7 @@ func (t *Tools) ReadFile(ctx context.Context, in ReadFileIn) (ReadFileOut, error
 	if err != nil {
 		return ReadFileOut{}, err
 	}
-	t.State.BumpActivity(sb.Name, time.Now().UTC())
-	_ = t.persist()
+	t.touch(sb.Name)
 	return ReadFileOut{Content: string(body), Truncated: truncated}, nil
 }
 
@@ -663,8 +666,7 @@ func (t *Tools) ListFiles(ctx context.Context, in ListFilesIn) (ListFilesOut, er
 	if err != nil {
 		return ListFilesOut{}, err
 	}
-	t.State.BumpActivity(sb.Name, time.Now().UTC())
-	_ = t.persist()
+	t.touch(sb.Name)
 	return ListFilesOut{Entries: entries}, nil
 }
 
@@ -712,8 +714,7 @@ func (t *Tools) EditFile(ctx context.Context, in EditFileIn) (EditFileOut, error
 	if err := t.Backend.WriteFile(ctx, sb.Name, in.Path, []byte(updated), 0o644, pixelUID, pixelGID); err != nil {
 		return EditFileOut{}, fmt.Errorf("write: %w", err)
 	}
-	t.State.BumpActivity(sb.Name, time.Now().UTC())
-	_ = t.persist()
+	t.touch(sb.Name)
 	return EditFileOut{OK: true, Replacements: count}, nil
 }
 
@@ -728,7 +729,6 @@ func (t *Tools) DeleteFile(ctx context.Context, in DeleteFileIn) (Ack, error) {
 	if err := t.Backend.DeleteFile(ctx, sb.Name, in.Path); err != nil {
 		return Ack{}, err
 	}
-	t.State.BumpActivity(sb.Name, time.Now().UTC())
-	_ = t.persist()
+	t.touch(sb.Name)
 	return Ack{OK: true}, nil
 }
