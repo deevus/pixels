@@ -579,6 +579,140 @@ func TestKnownHostsPath(t *testing.T) {
 	}
 }
 
+func TestMCPDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if got, want := cfg.MCP.Prefix, "mcp-"; got != want {
+		t.Errorf("Prefix = %q, want %q", got, want)
+	}
+	if got, want := cfg.MCP.IdleStopAfter, "1h"; got != want {
+		t.Errorf("IdleStopAfter = %q, want %q", got, want)
+	}
+	if got, want := cfg.MCP.HardDestroyAfter, "24h"; got != want {
+		t.Errorf("HardDestroyAfter = %q, want %q", got, want)
+	}
+	if got, want := cfg.MCP.ListenAddr, "127.0.0.1:8765"; got != want {
+		t.Errorf("ListenAddr = %q, want %q", got, want)
+	}
+}
+
+func TestMCPEnvOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Setenv("PIXELS_MCP_LISTEN_ADDR", "0.0.0.0:9000")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.MCP.ListenAddr, "0.0.0.0:9000"; got != want {
+		t.Errorf("ListenAddr = %q, want %q", got, want)
+	}
+}
+
+func TestMCPTOMLOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`
+[mcp]
+prefix = "test-"
+idle_stop_after = "30m"
+`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.MCP.Prefix, "test-"; got != want {
+		t.Errorf("Prefix = %q, want %q", got, want)
+	}
+	if got, want := cfg.MCP.IdleStopAfter, "30m"; got != want {
+		t.Errorf("IdleStopAfter = %q, want %q", got, want)
+	}
+}
+
+func TestMCPStateFilePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	cfg := &Config{}
+	got := cfg.MCPStateFile()
+	want := filepath.Join(tmpDir, "pixels", "mcp-state.json")
+	if got != want {
+		t.Errorf("MCPStateFile = %q, want %q", got, want)
+	}
+}
+
+func TestMCPStateFilePathOverride(t *testing.T) {
+	cfg := &Config{MCP: MCP{StateFile: "/custom/state.json"}}
+	if got, want := cfg.MCPStateFile(), "/custom/state.json"; got != want {
+		t.Errorf("MCPStateFile = %q, want %q", got, want)
+	}
+}
+
+func TestMCPBasesParsed(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`
+[mcp.bases.python]
+parent_image = "images:ubuntu/24.04"
+setup_script = "~/scripts/python.sh"
+description = "Python 3"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	b, ok := cfg.MCP.Bases["python"]
+	if !ok {
+		t.Fatalf("python base not parsed; got %+v", cfg.MCP.Bases)
+	}
+	if b.ParentImage != "images:ubuntu/24.04" {
+		t.Errorf("ParentImage = %q", b.ParentImage)
+	}
+	if b.Description != "Python 3" {
+		t.Errorf("Description = %q", b.Description)
+	}
+	// SetupScript should have ~ expanded.
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, "scripts/python.sh")
+	if b.SetupScript != want {
+		t.Errorf("SetupScript = %q, want %q (expanded)", b.SetupScript, want)
+	}
+}
+
+func TestMCPPIDFilePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	cfg := &Config{}
+	got := cfg.MCPPIDFile()
+	want := filepath.Join(tmpDir, "pixels", "mcp.pid")
+	if got != want {
+		t.Errorf("MCPPIDFile = %q, want %q", got, want)
+	}
+}
+
 func TestExpandHome(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -594,5 +728,208 @@ func TestExpandHome(t *testing.T) {
 	abs := "/absolute/path"
 	if expandHome(abs) != abs {
 		t.Errorf("expandHome(%q) should return unchanged", abs)
+	}
+}
+
+func TestMCPBasePrefixDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.MCP.BasePrefix, "base-"; got != want {
+		t.Errorf("BasePrefix = %q, want %q", got, want)
+	}
+}
+
+func TestMCPBasePrefixEnvOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Setenv("PIXELS_MCP_BASE_PREFIX", "custom-")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got, want := cfg.MCP.BasePrefix, "custom-"; got != want {
+		t.Errorf("BasePrefix = %q, want %q", got, want)
+	}
+}
+
+func TestBaseFromField(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`
+[mcp.bases.dev]
+parent_image = "images:ubuntu/24.04"
+setup_script = "/tmp/dev.sh"
+description = "Dev"
+
+[mcp.bases.python]
+from = "dev"
+setup_script = "/tmp/python.sh"
+description = "Python"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.MCP.Bases["python"].From; got != "dev" {
+		t.Errorf("python.From = %q, want dev", got)
+	}
+	if got := cfg.MCP.Bases["dev"].ParentImage; got != "images:ubuntu/24.04" {
+		t.Errorf("dev.ParentImage = %q", got)
+	}
+}
+
+func TestBaseRejectsBothParentImageAndFrom(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`
+[mcp.bases.bad]
+parent_image = "images:ubuntu/24.04"
+from = "dev"
+setup_script = "/tmp/x.sh"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load to error on base with both parent_image and from")
+	}
+}
+
+func TestBaseRejectsNeitherParentImageNorFrom(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	_ = os.WriteFile(cfgPath, []byte(`
+[mcp.bases.bad]
+setup_script = "/tmp/x.sh"
+`), 0o644)
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load to error on base with neither parent_image nor from")
+	}
+}
+
+func TestBaseRejectsFromMissingTarget(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	_ = os.WriteFile(cfgPath, []byte(`
+[mcp.bases.python]
+from = "doesnotexist"
+setup_script = "/tmp/x.sh"
+`), 0o644)
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load to error on base whose from references a missing base")
+	}
+}
+
+func TestBaseRejectsCycle(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	_ = os.WriteFile(cfgPath, []byte(`
+[mcp.bases.a]
+from = "b"
+setup_script = "/tmp/x.sh"
+
+[mcp.bases.b]
+from = "a"
+setup_script = "/tmp/x.sh"
+`), 0o644)
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load to error on base cycle")
+	}
+}
+
+func TestBaseAcceptsValidChain(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	_ = os.WriteFile(cfgPath, []byte(`
+[mcp.bases.dev]
+parent_image = "images:ubuntu/24.04"
+setup_script = "/tmp/dev.sh"
+
+[mcp.bases.python]
+from = "dev"
+setup_script = "/tmp/python.sh"
+
+[mcp.bases.django]
+from = "python"
+setup_script = "/tmp/django.sh"
+`), 0o644)
+	_, err := Load()
+	if err != nil {
+		t.Fatalf("expected valid chain to load, got: %v", err)
+	}
+}
+
+func TestDefaultBasesMergedWhenAbsentFromUserConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"dev", "python", "node"} {
+		if _, ok := cfg.MCP.Bases[name]; !ok {
+			t.Errorf("default base %q should be present after Load with no user config", name)
+		}
+	}
+}
+
+func TestUserConfigReplacesDefault(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	cfgPath := filepath.Join(tmpDir, "pixels", "config.toml")
+	_ = os.MkdirAll(filepath.Dir(cfgPath), 0o755)
+	_ = os.WriteFile(cfgPath, []byte(`
+[mcp.bases.python]
+parent_image = "images:debian/12"
+setup_script = "/tmp/my-python.sh"
+description = "my python"
+`), 0o644)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.MCP.Bases["python"]
+	if got.ParentImage != "images:debian/12" {
+		t.Errorf("user config did not win: ParentImage = %q", got.ParentImage)
+	}
+	if got.From != "" {
+		t.Errorf("user config did not fully replace default: From = %q (default had from='dev')", got.From)
+	}
+	if got.Description != "my python" {
+		t.Errorf("Description = %q", got.Description)
+	}
+	// Other defaults still present
+	if _, ok := cfg.MCP.Bases["dev"]; !ok {
+		t.Errorf("dev (untouched default) should still be present")
 	}
 }

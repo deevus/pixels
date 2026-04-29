@@ -44,10 +44,11 @@ func New(cfg map[string]string) (*Incus, error) {
 		server = server.UseProject(c.project)
 	}
 
-	return &Incus{
+	i := &Incus{
 		server: server,
 		cfg:    c,
-	}, nil
+	}
+	return i, nil
 }
 
 // connect establishes a connection to the Incus daemon.

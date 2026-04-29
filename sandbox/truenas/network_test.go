@@ -16,19 +16,30 @@ import (
 
 // mockSSH records SSH calls for test verification.
 type mockSSH struct {
-	execCalls   []mockSSHCall
-	outputCalls []mockSSHCall
-	waitCalls   []string
+	execCalls     []mockSSHCall
+	outputCalls   []mockSSHCall
+	waitCalls     []string
+	testAuthCalls []mockSSHCall
 
 	// Configurable responses.
-	execFn   func(ctx context.Context, cc ssh.ConnConfig, cmd []string) (int, error)
-	outputFn func(ctx context.Context, cc ssh.ConnConfig, cmd []string) ([]byte, error)
+	execFn     func(ctx context.Context, cc ssh.ConnConfig, cmd []string) (int, error)
+	outputFn   func(ctx context.Context, cc ssh.ConnConfig, cmd []string) ([]byte, error)
+	waitFn     func(ctx context.Context, host string, timeout time.Duration, log io.Writer) error
+	testAuthFn func(ctx context.Context, cc ssh.ConnConfig) error
 }
 
 type mockSSHCall struct {
 	Host string
 	User string
 	Cmd  []string
+}
+
+func (m *mockSSH) Exec(ctx context.Context, cc ssh.ConnConfig, cmd []string) (int, error) {
+	m.execCalls = append(m.execCalls, mockSSHCall{Host: cc.Host, User: cc.User, Cmd: cmd})
+	if m.execFn != nil {
+		return m.execFn(ctx, cc, cmd)
+	}
+	return 0, nil
 }
 
 func (m *mockSSH) ExecQuiet(ctx context.Context, cc ssh.ConnConfig, cmd []string) (int, error) {
@@ -47,8 +58,27 @@ func (m *mockSSH) OutputQuiet(ctx context.Context, cc ssh.ConnConfig, cmd []stri
 	return nil, nil
 }
 
+// probeOK returns an outputFn that satisfies Ready()'s smoke probe by
+// returning a non-empty `id`-style line for any call.
+func probeOK() func(ctx context.Context, cc ssh.ConnConfig, cmd []string) ([]byte, error) {
+	return func(ctx context.Context, cc ssh.ConnConfig, cmd []string) ([]byte, error) {
+		return []byte("uid=1000(pixel) gid=1000(pixel)\n"), nil
+	}
+}
+
 func (m *mockSSH) WaitReady(ctx context.Context, host string, timeout time.Duration, log io.Writer) error {
 	m.waitCalls = append(m.waitCalls, host)
+	if m.waitFn != nil {
+		return m.waitFn(ctx, host, timeout, log)
+	}
+	return nil
+}
+
+func (m *mockSSH) TestAuth(ctx context.Context, cc ssh.ConnConfig) error {
+	m.testAuthCalls = append(m.testAuthCalls, mockSSHCall{Host: cc.Host, User: cc.User})
+	if m.testAuthFn != nil {
+		return m.testAuthFn(ctx, cc)
+	}
 	return nil
 }
 

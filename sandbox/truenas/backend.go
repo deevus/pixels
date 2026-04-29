@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,13 @@ import (
 	"github.com/deevus/pixels/internal/ssh"
 	"github.com/deevus/pixels/sandbox"
 )
+
+// stopTimeoutSeconds is the graceful shutdown timeout passed to Incus via
+// virt.instance.stop. Incus runs `cc.Shutdown(0)` and waits this long for
+// systemd to stop all units inside the container; on timeout the call
+// returns a "Failed shutting down instance" error. Sized to cover the
+// post-apt systemd settle that 30s wasn't enough for.
+const stopTimeoutSeconds int64 = 120
 
 // clearAndRefreshHostKey removes stale known_hosts entries for both IP and hostname,
 // then waits for SSH readiness.
@@ -114,7 +122,7 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 				t.warnf("provision %s: %v", name, err)
 			} else if pubKey != "" {
 				// Restart so rc.local runs on boot.
-				_ = t.client.Virt.StopInstance(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30})
+				_ = t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: stopTimeoutSeconds})
 				if err := t.client.Virt.StartInstance(ctx, full); err != nil {
 					return nil, fmt.Errorf("restarting after provision: %w", err)
 				}
@@ -153,10 +161,10 @@ func (t *TrueNAS) Create(ctx context.Context, opts sandbox.CreateOpts) (*sandbox
 func (t *TrueNAS) Get(ctx context.Context, name string) (*sandbox.Instance, error) {
 	inst, err := t.client.Virt.GetInstance(ctx, prefixed(name))
 	if err != nil {
-		return nil, fmt.Errorf("getting %s: %w", name, err)
+		return nil, sandbox.WrapNotFound(fmt.Errorf("getting %s: %w", name, err))
 	}
 	if inst == nil {
-		return nil, fmt.Errorf("instance %q not found", name)
+		return nil, sandbox.WrapNotFound(fmt.Errorf("instance %q not found", name))
 	}
 	return toInstance(inst), nil
 }
@@ -198,29 +206,33 @@ func (t *TrueNAS) Start(ctx context.Context, name string) error {
 	return nil
 }
 
-// Stop stops a running instance.
+// Stop stops a running instance. No-ops if the instance is already stopped.
 func (t *TrueNAS) Stop(ctx context.Context, name string) error {
-	if err := t.client.Virt.StopInstance(ctx, prefixed(name), tnapi.StopVirtInstanceOpts{
-		Timeout: 30,
+	if err := t.client.StopInstanceIfRunning(ctx, prefixed(name), tnapi.StopVirtInstanceOpts{
+		Timeout: stopTimeoutSeconds,
 	}); err != nil {
 		return fmt.Errorf("stopping %s: %w", name, err)
 	}
 	return nil
 }
 
-// Delete stops (if running) and deletes an instance with retry.
+// Delete stops (if running) and deletes an instance with retry. Returns an
+// error wrapping sandbox.ErrNotFound if the instance is already gone, so
+// callers can distinguish "already absent" from real failures.
 func (t *TrueNAS) Delete(ctx context.Context, name string) error {
 	full := prefixed(name)
 
 	// Best-effort stop.
-	_ = t.client.Virt.StopInstance(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30})
+	_ = t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: stopTimeoutSeconds})
 
 	// Resolve IP before deletion so we can clean up the known_hosts entry.
-	inst, _ := t.client.Virt.GetInstance(ctx, full)
-	var ip string
-	if inst != nil {
-		ip = ipFromAliases(inst.Aliases)
+	// If the instance is already gone, short-circuit with ErrNotFound so
+	// callers (e.g. MCP DestroySandbox) can clean up their state idempotently.
+	inst, getErr := t.client.Virt.GetInstance(ctx, full)
+	if inst == nil || errors.Is(sandbox.WrapNotFound(getErr), sandbox.ErrNotFound) {
+		return sandbox.WrapNotFound(fmt.Errorf("instance %q does not exist", name))
 	}
+	ip := ipFromAliases(inst.Aliases)
 
 	// Retry delete (Incus storage release timing).
 	if err := retry.Do(ctx, 3, 2*time.Second, func(ctx context.Context) error {
@@ -262,13 +274,20 @@ func (t *TrueNAS) ListSnapshots(ctx context.Context, name string) ([]sandbox.Sna
 	}
 	result := make([]sandbox.Snapshot, len(snaps))
 	for i, s := range snaps {
+		// TrueNAS doesn't expose ZFS creation time via truenas-go; synthesize from CreateTXG for monotonic ordering. Not real wall-clock time.
+		var createdAt time.Time
+		if txg, err := strconv.ParseInt(s.CreateTXG, 10, 64); err == nil {
+			createdAt = time.Unix(txg, 0).UTC()
+		}
 		result[i] = sandbox.Snapshot{
-			Label: s.SnapshotName,
-			Size:  s.Referenced,
+			Label:     s.SnapshotName,
+			Size:      s.Referenced,
+			CreatedAt: createdAt,
 		}
 	}
 	return result, nil
 }
+
 
 // DeleteSnapshot deletes a ZFS snapshot by label.
 func (t *TrueNAS) DeleteSnapshot(ctx context.Context, name, label string) error {
@@ -288,7 +307,7 @@ func (t *TrueNAS) RestoreSnapshot(ctx context.Context, name, label string) error
 		return err
 	}
 
-	if err := t.client.Virt.StopInstance(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: 30}); err != nil {
+	if err := t.client.StopInstanceIfRunning(ctx, full, tnapi.StopVirtInstanceOpts{Timeout: stopTimeoutSeconds}); err != nil {
 		return fmt.Errorf("stopping %s: %w", name, err)
 	}
 	if err := t.client.SnapshotRollback(ctx, ds+"@"+label); err != nil {
@@ -311,12 +330,59 @@ func (t *TrueNAS) RestoreSnapshot(ctx context.Context, name, label string) error
 }
 
 // CloneFrom clones a source container's snapshot into a new container.
+// CloneFrom creates newName as an independent copy of source@label.
 func (t *TrueNAS) CloneFrom(ctx context.Context, source, label, newName string) error {
+	// Get source instance to copy its resource limits.
+	src, err := t.client.Virt.GetInstance(ctx, prefixed(source))
+	if err != nil {
+		return fmt.Errorf("getting source %s: %w", source, err)
+	}
+
+	// Create a bare container with matching resource limits.
+	createOpts := CreateInstanceOpts{
+		Name:      prefixed(newName),
+		Image:     t.cfg.image, // irrelevant; rootfs gets replaced
+		CPU:       src.CPU,
+		Memory:    src.Memory,
+		Autostart: false,
+	}
+	if t.cfg.nicType != "" {
+		createOpts.NIC = &NICOpts{
+			NICType: strings.ToUpper(t.cfg.nicType),
+			Parent:  t.cfg.parent,
+		}
+	} else {
+		nic, err := t.client.DefaultNIC(ctx)
+		if err == nil {
+			createOpts.NIC = nic
+		}
+	}
+
+	if _, err := t.client.CreateInstance(ctx, createOpts); err != nil {
+		return fmt.Errorf("creating clone shell: %w", err)
+	}
+
+	// Defensive stop in case the shell ended up running (Autostart=false should
+	// keep it stopped, but the helper makes it a no-op either way).
+	if err := t.client.StopInstanceIfRunning(ctx, prefixed(newName), tnapi.StopVirtInstanceOpts{Timeout: stopTimeoutSeconds}); err != nil {
+		return fmt.Errorf("stopping clone shell: %w", err)
+	}
+
+	// Replace root filesystem with a ZFS clone of the snapshot.
 	ds, err := t.resolveDataset(ctx, source)
 	if err != nil {
 		return err
 	}
-	return t.client.ReplaceContainerRootfs(ctx, prefixed(newName), ds+"@"+label)
+	if err := t.client.ReplaceContainerRootfs(ctx, prefixed(newName), ds+"@"+label); err != nil {
+		return fmt.Errorf("replacing rootfs: %w", err)
+	}
+
+	// Start the clone.
+	if err := t.client.Virt.StartInstance(ctx, prefixed(newName)); err != nil {
+		return fmt.Errorf("starting clone: %w", err)
+	}
+
+	return nil
 }
 
 // resolveDataset returns the ZFS dataset path for an instance.

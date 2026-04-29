@@ -19,6 +19,7 @@ type Config struct {
 	Checkpoint Checkpoint     `toml:"checkpoint"`
 	Provision  Provision      `toml:"provision"`
 	Network    Network        `toml:"network"`
+	MCP        MCP            `toml:"mcp"`
 	RawEnv     map[string]any `toml:"env"`
 
 	// Resolved env vars (not from TOML directly).
@@ -41,6 +42,28 @@ type TrueNAS struct {
 	Username           string `toml:"username"            env:"PIXELS_TRUENAS_USERNAME"`
 	APIKey             string `toml:"api_key"             env:"PIXELS_TRUENAS_API_KEY"`
 	InsecureSkipVerify *bool  `toml:"insecure_skip_verify" env:"PIXELS_TRUENAS_INSECURE"`
+}
+
+type Base struct {
+	ParentImage string `toml:"parent_image"`
+	From        string `toml:"from"`
+	SetupScript string `toml:"setup_script"`
+	Description string `toml:"description"`
+}
+
+type MCP struct {
+	Prefix           string          `toml:"prefix"             env:"PIXELS_MCP_PREFIX"`
+	BasePrefix       string          `toml:"base_prefix"        env:"PIXELS_MCP_BASE_PREFIX"`
+	DefaultImage     string          `toml:"default_image"      env:"PIXELS_MCP_DEFAULT_IMAGE"`
+	IdleStopAfter    string          `toml:"idle_stop_after"    env:"PIXELS_MCP_IDLE_STOP_AFTER"`
+	HardDestroyAfter string          `toml:"hard_destroy_after" env:"PIXELS_MCP_HARD_DESTROY_AFTER"`
+	ReapInterval     string          `toml:"reap_interval"      env:"PIXELS_MCP_REAP_INTERVAL"`
+	StateFile        string          `toml:"state_file"         env:"PIXELS_MCP_STATE_FILE"`
+	PIDFile          string          `toml:"pid_file"           env:"PIXELS_MCP_PID_FILE"`
+	ExecTimeoutMax   string          `toml:"exec_timeout_max"   env:"PIXELS_MCP_EXEC_TIMEOUT_MAX"`
+	ListenAddr       string          `toml:"listen_addr"        env:"PIXELS_MCP_LISTEN_ADDR"`
+	EndpointPath     string          `toml:"endpoint_path"      env:"PIXELS_MCP_ENDPOINT_PATH"`
+	Bases            map[string]Base `toml:"bases"`
 }
 
 type Defaults struct {
@@ -120,6 +143,19 @@ func Load() (*Config, error) {
 		Network: Network{
 			Egress: "unrestricted",
 		},
+		MCP: MCP{
+			// Prefix and BasePrefix sit *inside* the backend's "px-" namespace.
+			// Final on-disk names are "px-<Prefix><name>" / "px-<BasePrefix><name>"
+			// because both backends unconditionally prepend "px-" via prefixed().
+			Prefix:           "mcp-",
+			BasePrefix:       "base-",
+			IdleStopAfter:    "1h",
+			HardDestroyAfter: "24h",
+			ReapInterval:     "1m",
+			ExecTimeoutMax:   "10m",
+			ListenAddr:       "127.0.0.1:8765",
+			EndpointPath:     "/mcp",
+		},
 	}
 
 	path := configPath()
@@ -139,11 +175,85 @@ func Load() (*Config, error) {
 	cfg.Incus.ClientKey = expandHome(cfg.Incus.ClientKey)
 	cfg.Incus.ServerCert = expandHome(cfg.Incus.ServerCert)
 
+	for name, b := range cfg.MCP.Bases {
+		b.SetupScript = expandHome(b.SetupScript)
+		cfg.MCP.Bases[name] = b
+	}
+
+	// Merge default bases into config: user config wins on name conflict.
+	if cfg.MCP.Bases == nil {
+		cfg.MCP.Bases = make(map[string]Base)
+	}
+	for name, b := range DefaultBases {
+		if _, ok := cfg.MCP.Bases[name]; ok {
+			continue // user config wins
+		}
+		cfg.MCP.Bases[name] = b
+	}
+
 	if err := resolveEnv(cfg); err != nil {
 		return nil, err
 	}
 
+	if err := validateBases(cfg.MCP.Bases); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// validateBases checks that every [mcp.bases] entry declares exactly one of
+// parent_image or from, that every from references an existing base, and
+// that the dependency graph has no cycles.
+func validateBases(bases map[string]Base) error {
+	if len(bases) == 0 {
+		return nil
+	}
+	for name, b := range bases {
+		hasParent := b.ParentImage != ""
+		hasFrom := b.From != ""
+		if hasParent && hasFrom {
+			return fmt.Errorf("mcp.bases.%s: parent_image and from are mutually exclusive", name)
+		}
+		if !hasParent && !hasFrom {
+			return fmt.Errorf("mcp.bases.%s: must declare exactly one of parent_image or from", name)
+		}
+		if hasFrom {
+			if _, ok := bases[b.From]; !ok {
+				return fmt.Errorf("mcp.bases.%s: from references unknown base %q", name, b.From)
+			}
+		}
+	}
+	// Cycle detection via DFS with white/gray/black coloring.
+	const (
+		white = 0
+		gray  = 1
+		black = 2
+	)
+	colour := make(map[string]int, len(bases))
+	var visit func(name, path string) error
+	visit = func(name, path string) error {
+		switch colour[name] {
+		case gray:
+			return fmt.Errorf("mcp.bases: cycle detected: %s -> %s", path, name)
+		case black:
+			return nil
+		}
+		colour[name] = gray
+		if from := bases[name].From; from != "" {
+			if err := visit(from, path+" -> "+name); err != nil {
+				return err
+			}
+		}
+		colour[name] = black
+		return nil
+	}
+	for name := range bases {
+		if err := visit(name, ""); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // resolveEnv splits RawEnv entries into image vars (Env) and session vars (EnvForward).
@@ -211,6 +321,30 @@ func (t *TrueNAS) InsecureSkipVerifyValue() bool {
 		return false
 	}
 	return *t.InsecureSkipVerify
+}
+
+// MCPStateFile returns the resolved path to the MCP state file.
+func (c *Config) MCPStateFile() string {
+	if c.MCP.StateFile != "" {
+		return expandHome(c.MCP.StateFile)
+	}
+	return filepath.Join(mcpCacheDir(), "mcp-state.json")
+}
+
+// MCPPIDFile returns the resolved path to the MCP pidfile.
+func (c *Config) MCPPIDFile() string {
+	if c.MCP.PIDFile != "" {
+		return expandHome(c.MCP.PIDFile)
+	}
+	return filepath.Join(mcpCacheDir(), "mcp.pid")
+}
+
+func mcpCacheDir() string {
+	if dir := os.Getenv("XDG_CACHE_HOME"); dir != "" {
+		return filepath.Join(dir, "pixels")
+	}
+	dir, _ := os.UserCacheDir()
+	return filepath.Join(dir, "pixels")
 }
 
 // KnownHostsPath returns the path to the pixels-managed SSH known_hosts file.

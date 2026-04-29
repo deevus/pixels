@@ -292,7 +292,7 @@ func (i *Incus) Get(ctx context.Context, name string) (*sandbox.Instance, error)
 	full := prefixed(name)
 	inst, _, err := i.server.GetInstance(full)
 	if err != nil {
-		return nil, fmt.Errorf("getting %s: %w", name, err)
+		return nil, sandbox.WrapNotFound(fmt.Errorf("getting %s: %w", name, err))
 	}
 
 	state, _, err := i.server.GetInstanceState(full)
@@ -414,12 +414,14 @@ func (i *Incus) ListSnapshots(ctx context.Context, name string) ([]sandbox.Snaps
 	result := make([]sandbox.Snapshot, len(snaps))
 	for idx, s := range snaps {
 		result[idx] = sandbox.Snapshot{
-			Label: s.Name,
-			Size:  s.Size,
+			Label:     s.Name,
+			Size:      s.Size,
+			CreatedAt: s.CreatedAt,
 		}
 	}
 	return result, nil
 }
+
 
 // DeleteSnapshot deletes a snapshot by label.
 func (i *Incus) DeleteSnapshot(ctx context.Context, name, label string) error {

@@ -47,12 +47,13 @@ func New(cfg map[string]string) (*TrueNAS, error) {
 		return nil, err
 	}
 
-	return &TrueNAS{
+	t := &TrueNAS{
 		client: client,
 		cfg:    c,
 		ssh:    realSSH{},
 		warn:   os.Stderr,
-	}, nil
+	}
+	return t, nil
 }
 
 // NewForTest creates a TrueNAS backend with injected dependencies for testing.
@@ -61,12 +62,13 @@ func NewForTest(client *Client, ssh sshRunner, cfg map[string]string) (*TrueNAS,
 	if err != nil {
 		return nil, err
 	}
-	return &TrueNAS{
+	t := &TrueNAS{
 		client: client,
 		cfg:    c,
 		ssh:    ssh,
 		warn:   os.Stderr,
-	}, nil
+	}
+	return t, nil
 }
 
 // Capabilities advertises that TrueNAS supports all optional features.

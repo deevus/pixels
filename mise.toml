@@ -12,3 +12,6 @@ run = "./pixels"
 
 [tasks.check-release]
 run = "mise exec goreleaser -- goreleaser check"
+
+[tasks.coverage]
+run = "go test -race -covermode=atomic ./..."

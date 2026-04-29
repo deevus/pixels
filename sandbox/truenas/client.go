@@ -407,6 +407,21 @@ func (c *Client) ListInstances(ctx context.Context) ([]truenas.VirtInstance, err
 	return c.Virt.ListInstances(ctx, [][]any{{"name", "^", "px-"}})
 }
 
+// StopInstanceIfRunning stops the named instance only if its current status is
+// RUNNING. No-ops on any other status (STOPPED, FROZEN, etc.) so callers don't
+// need to know the prior state. Returns nil if the instance can't be found —
+// callers in cleanup paths shouldn't error on a missing target.
+func (c *Client) StopInstanceIfRunning(ctx context.Context, name string, opts truenas.StopVirtInstanceOpts) error {
+	inst, err := c.Virt.GetInstance(ctx, name)
+	if err != nil || inst == nil {
+		return nil
+	}
+	if inst.Status != "RUNNING" {
+		return nil
+	}
+	return c.Virt.StopInstance(ctx, name, opts)
+}
+
 // ListSnapshots queries snapshots for the given ZFS dataset.
 func (c *Client) ListSnapshots(ctx context.Context, dataset string) ([]truenas.Snapshot, error) {
 	return c.Snapshot.Query(ctx, [][]any{{"dataset", "=", dataset}})

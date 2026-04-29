@@ -5,9 +5,16 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"io"
+	"os"
 	"time"
 )
+
+// ErrNotFound is returned (wrapped) by backend operations when the target
+// instance or snapshot does not exist. Callers can use errors.Is to
+// disambiguate from other errors.
+var ErrNotFound = errors.New("sandbox: not found")
 
 // Backend manages the lifecycle of sandbox instances and their snapshots.
 type Backend interface {
@@ -44,10 +51,35 @@ type NetworkPolicy interface {
 	GetPolicy(ctx context.Context, name string) (*Policy, error)
 }
 
+// FileEntry describes one entry in a ListFiles result.
+type FileEntry struct {
+	Path  string      `json:"path"`
+	Size  int64       `json:"size"`
+	Mode  os.FileMode `json:"mode"`
+	IsDir bool        `json:"is_dir"`
+}
+
+// Files provides byte-level file I/O into a sandbox instance.
+type Files interface {
+	// WriteFile writes content to path inside the sandbox with the given mode.
+	// uid/gid set the resulting file's ownership; pass negative values to
+	// leave the backend default (root for filesystem-API writes; the
+	// configured exec user for SSH/exec-based writes).
+	WriteFile(ctx context.Context, name, path string, content []byte, mode os.FileMode, uid, gid int) error
+	ReadFile(ctx context.Context, name, path string, maxBytes int64) (content []byte, truncated bool, err error)
+	ListFiles(ctx context.Context, name, path string, recursive bool) ([]FileEntry, error)
+	DeleteFile(ctx context.Context, name, path string) error
+}
+
+// NoOwner is the sentinel for "leave default ownership" passed to
+// [Files.WriteFile]. Either uid or gid being negative skips the chown.
+const NoOwner = -1
+
 // Sandbox composes all sandbox capabilities into a single interface.
 type Sandbox interface {
 	Backend
 	Exec
+	Files
 	NetworkPolicy
 }
 
@@ -71,8 +103,9 @@ type Instance struct {
 
 // Snapshot is a point-in-time capture of an instance's filesystem.
 type Snapshot struct {
-	Label string
-	Size  int64
+	Label     string
+	Size      int64
+	CreatedAt time.Time
 }
 
 // CreateOpts holds parameters for creating a new sandbox instance.

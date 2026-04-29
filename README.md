@@ -328,6 +328,145 @@ Create `~/.config/pixels/config.toml`:
 | `PIXELS_PROVISION_DEVTOOLS` | `provision.devtools` |
 | `PIXELS_NETWORK_EGRESS` | `network.egress` |
 
+## Using `pixels` as an MCP code-sandbox server
+
+`pixels mcp` runs a streamable-HTTP MCP server that exposes container
+lifecycle, exec, and file CRUD as MCP tools. Run it once on your
+machine, then point any number of MCP clients at it.
+
+### Start the daemon
+
+    pixels mcp
+
+By default it binds to `http://127.0.0.1:8765/mcp` and refuses to start
+if another instance is already running (PID file at
+`~/.cache/pixels/mcp.pid`).
+
+### Configure your client
+
+Claude Code MCP entry:
+
+    {
+      "mcpServers": {
+        "pixels": {
+          "type": "http",
+          "url": "http://127.0.0.1:8765/mcp"
+        }
+      }
+    }
+
+### Tools
+
+| Tool | What it does |
+|---|---|
+| `create_sandbox` | Spin up a new ephemeral container (`base` for fast clone, `image` for raw) |
+| `list_sandboxes` | List tracked sandboxes (with status, error, IP) |
+| `list_bases` | List declared base pixels and their status |
+| `start_sandbox` / `stop_sandbox` / `destroy_sandbox` | Lifecycle |
+| `exec` | Run a command inside a sandbox |
+| `write_file` | Create or fully overwrite a file |
+| `read_file` | Read a file (optional truncation via `max_bytes`) |
+| `edit_file` | Replace `old_string` with `new_string` (with optional `replace_all`) |
+| `delete_file` | Remove a file |
+| `list_files` | List directory contents (optionally recursive) |
+
+### Base pixels
+
+A base is a container that sandboxes clone from. Bases are declared in
+config (or shipped as defaults) and built on demand.
+
+Three bases ship out of the box:
+
+- `dev` — Ubuntu 24.04 + git, curl, wget, jq, vim, build-essential
+- `python` — `dev` + python3, pip, pipx, venv
+- `node` — `dev` + Node 22 LTS, npm
+
+Add your own in config. Each base must declare exactly one of `parent_image` or `from`:
+
+```toml
+[mcp.bases.rust]
+parent_image = "ubuntu/24.04"
+setup_script = "~/.config/pixels/bases/rust.sh"
+description  = "Rust toolchain"
+```
+
+Or build on top of another base:
+
+```toml
+[mcp.bases.rust-dev]
+from = "dev"
+setup_script = "~/.config/pixels/bases/rust-dev.sh"
+description  = "Rust toolchain + dev tools"
+```
+
+Bases form a DAG via `from`. Cycle / missing-dep / both-set / neither-set
+are rejected at config load.
+
+Customise a base by mutating its container:
+
+```bash
+pixels start px-base-python
+pixels exec px-base-python -- apt install vim
+pixels stop px-base-python
+pixels checkpoint create px-base-python
+```
+
+The next `create_sandbox(base="python")` call clones from the new
+checkpoint. Existing sandboxes are unaffected (independent containers).
+
+**Checkpoint-advances-clone-source.** Any `pixels checkpoint create px-base-X`
+immediately advances the snapshot that future sandboxes clone from. If you take
+a *safety* checkpoint before mutating, new sandboxes will clone from that
+pre-mutation state until you take another checkpoint *after* the changes. Always
+re-checkpoint after mutating to ensure new clones pick up your changes.
+
+**Mutation-propagation gotcha.** Changes to `dev` do NOT auto-flow into
+`python` or `node`. Both are independent containers built when `dev` was
+in its prior state. To propagate: `pixels destroy px-base-python &&
+pixels base build python`. Same semantics as Docker layered images.
+
+CLI:
+
+| Command | Action |
+|---|---|
+| `pixels base list` | Show declared bases + status |
+| `pixels base build <name>` | Build the base; cascade-builds missing deps |
+| `pixels destroy px-base-<name>` | Delete a base (existing CLI) |
+| `pixels checkpoint create px-base-<name>` | Publish a new state for clones |
+
+Example `pixels base list` output:
+
+```
+$ pixels base list
+NAME    FROM/IMAGE              STATUS  LAST_CHECKPOINT       DESCRIPTION
+dev     ubuntu/24.04            ready   2026-04-27 12:30:00   Ubuntu 24.04 + git, curl, vim, ...
+node    dev                     missing                       dev + Node 22 LTS, npm
+python  dev                     ready   2026-04-27 12:35:00   dev + python3, pip, pipx, venv
+```
+
+**Force rebuild.** There is no `pixels base rebuild` command. To force a full
+rebuild of a base, run `pixels destroy px-base-<name> && pixels base build <name>`.
+
+### Provisioning is async
+
+`create_sandbox` returns immediately with `status: "provisioning"`.
+The agent should poll `list_sandboxes` until status flips to `running`
+or `failed`. A failed sandbox includes an `error` field describing
+what went wrong.
+
+For simple use without a base, provisioning takes ~30s. With a built
+base, ~5s. With an unbuilt base, several minutes (the build runs
+behind the scenes).
+
+### Lifetimes
+
+Two TTLs apply (configurable in `[mcp]` config):
+
+- `idle_stop_after` (default 1h) — running sandbox with no recent
+  activity gets stopped.
+- `hard_destroy_after` (default 24h) — any sandbox older than this is
+  destroyed and removed from state.
+
 ## Security
 
 Container egress filtering uses nftables rules inside the container. A root process with `cap_net_admin` could bypass these rules. The `pixel` user has restricted sudo that only permits safe-apt, dpkg-query, systemctl, journalctl, and nft list.
