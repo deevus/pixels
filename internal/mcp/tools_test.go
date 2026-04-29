@@ -551,9 +551,13 @@ func TestExecAppliesCwd(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if len(capturedCmd) != 1 {
+		t.Fatalf("expected single shell-escaped element, got %d: %v", len(capturedCmd), capturedCmd)
+	}
 	want := []string{"env", "-C", "/tmp", "--", "pwd"}
-	if !reflect.DeepEqual(capturedCmd, want) {
-		t.Errorf("exec argv = %v, want %v", capturedCmd, want)
+	got := retokenize(t, capturedCmd[0])
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("re-tokenized argv = %v, want %v", got, want)
 	}
 }
 
@@ -576,12 +580,15 @@ func TestExecAppliesEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got, want := capturedCmd[0], "env"; got != want {
-		t.Errorf("argv[0] = %q, want %q", got, want)
+	if len(capturedCmd) != 1 {
+		t.Fatalf("expected single shell-escaped element, got %d: %v", len(capturedCmd), capturedCmd)
 	}
-	// Assert "X=hello" is somewhere in argv before "--".
+	tokens := retokenize(t, capturedCmd[0])
+	if len(tokens) == 0 || tokens[0] != "env" {
+		t.Errorf("argv[0] = %v, want env", tokens)
+	}
 	foundX := false
-	for _, a := range capturedCmd {
+	for _, a := range tokens {
 		if a == "--" {
 			break
 		}
@@ -590,7 +597,186 @@ func TestExecAppliesEnv(t *testing.T) {
 		}
 	}
 	if !foundX {
-		t.Errorf("env var X=hello missing from argv: %v", capturedCmd)
+		t.Errorf("env var X=hello missing from argv: %v", tokens)
+	}
+}
+
+// retokenize re-splits a shell-escaped command string the way a remote POSIX
+// shell would, so tests can assert the wrapped argv survives SSH joining.
+// shellescape.Quote emits single-quoted spans plus a `"'"` double-quoted
+// segment to escape literal apostrophes (e.g. `a'b` -> `'a'"'"'b'`); both
+// quoting forms are handled here, plus backslash escapes outside quotes.
+func retokenize(t *testing.T, s string) []string {
+	t.Helper()
+	var out []string
+	var cur strings.Builder
+	var inSingle, inDouble, started bool
+	flush := func() {
+		if started {
+			out = append(out, cur.String())
+			cur.Reset()
+			started = false
+		}
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case inSingle:
+			if c == '\'' {
+				inSingle = false
+				continue
+			}
+			cur.WriteByte(c)
+		case inDouble:
+			if c == '"' {
+				inDouble = false
+				continue
+			}
+			if c == '\\' && i+1 < len(s) {
+				cur.WriteByte(s[i+1])
+				i++
+				continue
+			}
+			cur.WriteByte(c)
+		case c == '\'':
+			inSingle = true
+			started = true
+		case c == '"':
+			inDouble = true
+			started = true
+		case c == '\\' && i+1 < len(s):
+			cur.WriteByte(s[i+1])
+			i++
+			started = true
+		case c == ' ' || c == '\t' || c == '\n':
+			flush()
+		default:
+			cur.WriteByte(c)
+			started = true
+		}
+	}
+	if inSingle || inDouble {
+		t.Fatalf("retokenize: unterminated quote in %q", s)
+	}
+	flush()
+	return out
+}
+
+// TestExecPreservesArgvBoundaries asserts that args containing spaces or shell
+// metacharacters (e.g. `bash -c "nohup node server.js &"`) reach the remote
+// shell as a single argv element. Without shell-escaping at the MCP boundary,
+// the local ssh client space-joins argv and the remote shell re-tokenizes,
+// which would split the bash -c argument and silently drop the trailing words.
+func TestExecPreservesArgvBoundaries(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+	}{
+		{
+			name: "bash -c with background job",
+			argv: []string{"bash", "-c", "nohup node server.js &"},
+		},
+		{
+			name: "bash -c with multi-word script",
+			argv: []string{"bash", "-c", "rm -f /tmp/foo"},
+		},
+		{
+			name: "single token argv",
+			argv: []string{"true"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tt, fb := newTestTools(t)
+			out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+
+			var captured []string
+			fb.runHook = func(name string, opts sandbox.ExecOpts) (int, error) {
+				captured = opts.Cmd
+				return 0, nil
+			}
+
+			if _, err := tt.Exec(context.Background(), ExecIn{
+				Name:    out.Name,
+				Command: tc.argv,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			if len(captured) != 1 {
+				t.Fatalf("expected single shell-escaped element so SSH cannot re-tokenize, got %d: %v", len(captured), captured)
+			}
+
+			want := append([]string{"env", "--"}, tc.argv...)
+			got := retokenize(t, captured[0])
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("re-tokenized argv = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+// TestExecPreservesEnvAndCwd guards env-value and cwd quoting. Env values like
+// `hello world; rm -rf /` must not split into multiple argv tokens or escape
+// the env wrapper, single quotes inside env values must round-trip through
+// shellescape's `'\''` pattern, and Cwd + Env set together must both reach
+// the remote shell intact.
+func TestExecPreservesEnvAndCwd(t *testing.T) {
+	cases := []struct {
+		name string
+		in   ExecIn
+		want []string
+	}{
+		{
+			name: "env value with shell metacharacters",
+			in: ExecIn{
+				Command: []string{"sh", "-c", "echo $X"},
+				Env:     map[string]string{"X": "hello world; rm -rf /"},
+			},
+			want: []string{"env", "X=hello world; rm -rf /", "--", "sh", "-c", "echo $X"},
+		},
+		{
+			name: "env value with embedded single quote",
+			in: ExecIn{
+				Command: []string{"true"},
+				Env:     map[string]string{"Y": "a'b"},
+			},
+			want: []string{"env", "Y=a'b", "--", "true"},
+		},
+		{
+			name: "cwd and env together",
+			in: ExecIn{
+				Command: []string{"sh", "-c", "echo $X"},
+				Cwd:     "/var/lib/some path",
+				Env:     map[string]string{"X": "v"},
+			},
+			want: []string{"env", "-C", "/var/lib/some path", "X=v", "--", "sh", "-c", "echo $X"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tt, fb := newTestTools(t)
+			out, _ := tt.CreateSandbox(context.Background(), CreateSandboxIn{})
+			tc.in.Name = out.Name
+
+			var captured []string
+			fb.runHook = func(name string, opts sandbox.ExecOpts) (int, error) {
+				captured = opts.Cmd
+				return 0, nil
+			}
+
+			if _, err := tt.Exec(context.Background(), tc.in); err != nil {
+				t.Fatal(err)
+			}
+
+			if len(captured) != 1 {
+				t.Fatalf("expected single shell-escaped element, got %d: %v", len(captured), captured)
+			}
+			got := retokenize(t, captured[0])
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("re-tokenized argv = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"al.essio.dev/pkg/shellescape"
+
 	"github.com/deevus/pixels/internal/config"
 	"github.com/deevus/pixels/sandbox"
 )
@@ -573,9 +575,9 @@ func (t *Tools) Exec(ctx context.Context, in ExecIn) (ExecOut, error) {
 
 	// Wrap the command in `env [-C cwd] [KEY=val ...] -- <command>` so cwd and
 	// env take effect regardless of how the backend handles ExecOpts.Env.
-	prefix := []string{"env"}
+	argv := []string{"env"}
 	if in.Cwd != "" {
-		prefix = append(prefix, "-C", in.Cwd)
+		argv = append(argv, "-C", in.Cwd)
 	}
 	keys := make([]string, 0, len(in.Env))
 	for k := range in.Env {
@@ -583,10 +585,16 @@ func (t *Tools) Exec(ctx context.Context, in ExecIn) (ExecOut, error) {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		prefix = append(prefix, k+"="+in.Env[k])
+		argv = append(argv, k+"="+in.Env[k])
 	}
-	prefix = append(prefix, "--")
-	cmd := append(prefix, in.Command...)
+	argv = append(argv, "--")
+	argv = append(argv, in.Command...)
+
+	// Backends like SSH space-join argv before sending — the remote shell then
+	// re-tokenizes, which silently splits any element containing whitespace or
+	// shell metacharacters (e.g. `bash -c "rm -f /path"`). Shell-escape and
+	// collapse to a single element so re-tokenization recovers the original argv.
+	cmd := []string{shellescape.QuoteCommand(argv)}
 
 	var stdout, stderr strings.Builder
 	exit, err := t.Backend.Run(ctx, sb.Name, sandbox.ExecOpts{
