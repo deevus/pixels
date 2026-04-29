@@ -6,7 +6,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/deevus/pixels)](https://goreportcard.com/report/github.com/deevus/pixels)
 [![Commercial Support](https://img.shields.io/badge/support-available-brightgreen)](#support)
 
-Disposable Linux containers for AI coding agents, with extensible backends.
+Disposable Linux containers for AI coding agents.
 
 Spin up sandboxed Linux containers pre-loaded with AI coding tools (Claude Code, Codex, OpenCode via mise). Each container gets snapshot-based checkpoints and network egress policies that control what the agent can reach. Ships with two backends: **Incus** (default, connects directly to a local or remote Incus daemon) and **TrueNAS** (manages Incus containers on TrueNAS SCALE via its WebSocket API).
 
@@ -120,7 +120,7 @@ All containers are prefixed `px-` internally. Commands accept bare names (e.g., 
 
 ## Console and Exec
 
-The **Incus backend** uses the native Incus exec API over WebSocket -- no SSH needed. The **TrueNAS backend** uses SSH to reach the container.
+The **Incus backend** uses the native Incus exec API over WebSocket. No SSH needed. The **TrueNAS backend** uses SSH to reach the container.
 
 **Console** opens an interactive session with zmx session persistence.
 Disconnecting and reconnecting re-attaches to the same session:
@@ -145,7 +145,7 @@ pixels sessions mybox
 pixels exec mybox -- ls -la /home/pixel
 ```
 
-With the TrueNAS backend, SSH key auth is verified on connect -- if it fails, the current machine's public key is automatically written to the container.
+With the TrueNAS backend, SSH key auth is verified on connect. If it fails, pixels writes your machine's public key into the container.
 
 ## Checkpoints
 
@@ -475,7 +475,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model, known issues, and miti
 
 ## Support
 
-Need help deploying pixels at your org? I offer implementation support, custom development, and training through my consultancy: [simonhartcher.com](https://simonhartcher.com). Email in bio.
+Need help deploying pixels at your org? I'll get it running, build whatever you need on top, and walk your team through it. Find me at [simonhartcher.com](https://simonhartcher.com). Email in bio.
 
 ## License
 
