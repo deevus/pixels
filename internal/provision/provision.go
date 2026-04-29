@@ -18,6 +18,9 @@ import (
 )
 
 // zmxVersion is the zmx release to install inside containers.
+// When bumping this, verify that `zmx list` field names still match
+// ParseSessions and the verification grep in provisionTmpl. The 0.4→0.5
+// jump renamed session_name/task_ended_at/task_exit_code to name/ended/exit_code.
 const zmxVersion = "0.5.0"
 
 // Step defines a named provisioning task to run via zmx.
@@ -273,7 +276,7 @@ func ParseSessions(raw string) []Session {
 	var sessions []Session
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || !strings.HasPrefix(line, "session_name=") {
+		if line == "" || !strings.HasPrefix(line, "name=") {
 			continue
 		}
 		fields := make(map[string]string)
@@ -283,9 +286,9 @@ func ParseSessions(raw string) []Session {
 			}
 		}
 		sessions = append(sessions, Session{
-			Name:     fields["session_name"],
-			EndedAt:  fields["task_ended_at"],
-			ExitCode: fields["task_exit_code"],
+			Name:     fields["name"],
+			EndedAt:  fields["ended"],
+			ExitCode: fields["exit_code"],
 		})
 	}
 	return sessions
@@ -364,7 +367,8 @@ echo "[$(date -Iseconds)] Waiting for steps"
 zmx wait {{.WaitArgs}}
 
 {{- range .Steps}}
-zmx list | grep 'session_name={{.Name}}' | grep -q 'task_exit_code=0' || { echo "[$(date -Iseconds)] {{.Name}} failed"; zmx history {{.Name}} 2>/dev/null || true; cleanup; exit 1; }
+# zmx 0.5.0: 'name=' is the first field; trailing tab anchors the value end.
+zmx list | grep 'name={{.Name}}	' | grep -q 'exit_code=0' || { echo "[$(date -Iseconds)] {{.Name}} failed"; zmx history {{.Name}} 2>/dev/null || true; cleanup; exit 1; }
 {{- end}}
 
 {{- range .Steps}}

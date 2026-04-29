@@ -159,14 +159,14 @@ func TestList(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		r := NewRunnerWith(&MockExecutor{
 			OutputFunc: func(ctx context.Context, command []string) ([]byte, error) {
-				return []byte("  session_name=px-test\tpid=1  \n"), nil
+				return []byte("  name=px-test\tpid=1  \n"), nil
 			},
 		})
 		out, err := r.List(context.Background())
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if out != "session_name=px-test\tpid=1" {
+		if out != "name=px-test\tpid=1" {
 			t.Errorf("output = %q, want trimmed", out)
 		}
 	})
@@ -283,14 +283,14 @@ func TestPollStatus(t *testing.T) {
 	}{
 		{
 			name:     "all done",
-			output:   "session_name=px-devtools\ttask_ended_at=100\ttask_exit_code=0",
+			output:   "name=px-devtools\tended=100\texit_code=0",
 			names:    []string{"px-devtools"},
 			wantStr:  "px-devtools done",
 			wantDone: true,
 		},
 		{
 			name:     "still running",
-			output:   "session_name=px-devtools\tpid=1",
+			output:   "name=px-devtools\tpid=1",
 			names:    []string{"px-devtools"},
 			wantStr:  "px-devtools running",
 			wantDone: false,
@@ -304,7 +304,7 @@ func TestPollStatus(t *testing.T) {
 		},
 		{
 			name:     "step failed",
-			output:   "session_name=px-devtools\ttask_ended_at=100\ttask_exit_code=1",
+			output:   "name=px-devtools\tended=100\texit_code=1",
 			names:    []string{"px-devtools"},
 			wantStr:  "px-devtools failed (exit 1)",
 			wantDone: true,
@@ -442,7 +442,7 @@ func TestParseSessions(t *testing.T) {
 	})
 
 	t.Run("completed session", func(t *testing.T) {
-		raw := "session_name=px-egress\tpid=1234\ttask_ended_at=100\ttask_exit_code=0\tcmd=bash"
+		raw := "name=px-egress\tpid=1234\tclients=0\tcreated=99\tstart_dir=/tmp\tended=100\texit_code=0"
 		sessions := ParseSessions(raw)
 		if len(sessions) != 1 || sessions[0].Name != "px-egress" || sessions[0].EndedAt != "100" || sessions[0].ExitCode != "0" {
 			t.Errorf("unexpected: %+v", sessions)
@@ -450,9 +450,9 @@ func TestParseSessions(t *testing.T) {
 	})
 
 	t.Run("skips non-session lines", func(t *testing.T) {
-		raw := "session_name=px-devtools\tpid=1\n" +
+		raw := "name=px-devtools\tpid=1\n" +
 			"garbage line\n" +
-			"session_name=px-egress\tpid=2"
+			"name=px-egress\tpid=2"
 		sessions := ParseSessions(raw)
 		if len(sessions) != 2 {
 			t.Fatalf("expected 2 sessions, got %d", len(sessions))
@@ -505,6 +505,21 @@ func TestScript(t *testing.T) {
 		zmx := strings.Index(script, "zmx")
 		if sentinel < 0 || zmx < 0 || sentinel > zmx {
 			t.Error("sentinel check should precede zmx commands")
+		}
+	})
+
+	t.Run("verification grep matches zmx 0.5.0 field names", func(t *testing.T) {
+		script := Script([]Step{{Name: "px-devtools", Script: "/x"}})
+		// zmx 0.5.0 emits name=<n>\t...\texit_code=<n>; older 0.4.x used
+		// session_name=/task_exit_code=. The script must use the new names.
+		if strings.Contains(script, "session_name=") || strings.Contains(script, "task_exit_code=") {
+			t.Error("script still references pre-0.5.0 zmx field names")
+		}
+		if !strings.Contains(script, "name=px-devtools\t") {
+			t.Error("script should grep for tab-anchored 'name=px-devtools'")
+		}
+		if !strings.Contains(script, "exit_code=0") {
+			t.Error("script should check for exit_code=0")
 		}
 	})
 }
