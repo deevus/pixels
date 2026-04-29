@@ -31,43 +31,6 @@ func TestNewRunner(t *testing.T) {
 	}
 }
 
-func TestInstallZmx(t *testing.T) {
-	tests := []struct {
-		name    string
-		code    int
-		err     error
-		wantErr string
-	}{
-		{"success", 0, nil, ""},
-		{"ssh error", 0, errors.New("connection refused"), "installing zmx:"},
-		{"non-zero exit", 5, nil, "installing zmx: exit code 5"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var captured []string
-			r := NewRunnerWith(&MockExecutor{
-				ExecFunc: func(ctx context.Context, command []string) (int, error) {
-					captured = command
-					return tt.code, tt.err
-				},
-			})
-			err := r.InstallZmx(context.Background())
-			if tt.wantErr == "" {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if len(captured) == 0 || !strings.Contains(captured[0], zmxVersion) {
-					t.Errorf("command should contain zmx version, got %v", captured)
-				}
-			} else {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Errorf("error = %v, want containing %q", err, tt.wantErr)
-				}
-			}
-		})
-	}
-}
-
 func TestRun(t *testing.T) {
 	tests := []struct {
 		name    string

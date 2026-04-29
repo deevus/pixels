@@ -106,21 +106,6 @@ func zmxCmd(cmd string) string {
 	return "unset XDG_RUNTIME_DIR && " + cmd
 }
 
-// InstallZmx downloads and installs the zmx binary inside the container.
-func (r *Runner) InstallZmx(ctx context.Context) error {
-	url := fmt.Sprintf("https://zmx.sh/a/zmx-%s-linux-x86_64.tar.gz", zmxVersion)
-	script := fmt.Sprintf("curl -fsSL %s | tar xz -C /usr/local/bin/", url)
-	r.logf("Installing zmx %s...", zmxVersion)
-	code, err := r.exec.Exec(ctx, []string{script})
-	if err != nil {
-		return fmt.Errorf("installing zmx: %w", err)
-	}
-	if code != 0 {
-		return fmt.Errorf("installing zmx: exit code %d", code)
-	}
-	return nil
-}
-
 // Run starts a provisioning step via zmx run. The command returns immediately;
 // the step executes in the background inside its own pty session.
 func (r *Runner) Run(ctx context.Context, step Step) error {
@@ -349,7 +334,7 @@ fi
 while [ ! -f /root/.ssh-provisioned ]; do sleep 1; done
 
 echo "[$(date -Iseconds)] Installing zmx {{.ZmxVersion}}"
-curl -fsSL https://zmx.sh/a/zmx-{{.ZmxVersion}}-linux-x86_64.tar.gz | tar xz -C /usr/local/bin/
+curl -fsSL https://zmx.sh/a/zmx-{{.ZmxVersion}}-linux-$(uname -m).tar.gz | tar xz -C /usr/local/bin/
 
 ZMX_SOCKET_DIR=$(zmx --version | awk '/socket_dir/{print $2}')
 mkdir -p "$ZMX_SOCKET_DIR"
