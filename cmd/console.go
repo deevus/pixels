@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"time"
 
+	"al.essio.dev/pkg/shellescape"
 	"github.com/briandowns/spinner"
 	"github.com/spf13/cobra"
 
@@ -104,7 +105,14 @@ func zmxRemoteCmdViaSandbox(ctx context.Context, sb sandbox.Sandbox, name, sessi
 		Cmd: []string{"sh", "-c", "command -v zmx >/dev/null 2>&1"},
 	})
 	if err == nil && code == 0 {
-		return []string{"sh", "-lc", "unset XDG_RUNTIME_DIR && zmx attach " + session + " bash -l"}
+		return zmxAttachCmd(session)
 	}
 	return nil
+}
+
+// zmxAttachCmd builds the shell command that attaches to a zmx session.
+// The session name is shell-escaped for defense-in-depth even though
+// validSessionName already restricts it to a safe character set.
+func zmxAttachCmd(session string) []string {
+	return []string{"sh", "-lc", "unset XDG_RUNTIME_DIR && zmx attach " + shellescape.Quote(session) + " bash -l"}
 }
