@@ -1,0 +1,12 @@
+[tools]
+node = { version = "lts" }
+
+# Agents
+claude-code = { version = "latest" }
+codex = { version = "latest" }
+opencode = { version = "latest" }
+"npm:@mariozechner/pi-coding-agent" = { version = "latest" }
+
+# Pi prerequisites
+fd = { version = "latest" }
+ripgrep = { version = "latest" }

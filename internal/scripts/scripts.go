@@ -9,6 +9,9 @@ var RcLocal string
 //go:embed setup-devtools.sh
 var SetupDevtools string
 
+//go:embed mise.toml
+var MiseToml string
+
 //go:embed setup-egress.sh
 var SetupEgress string
 

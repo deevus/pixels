@@ -203,13 +203,16 @@ func (i *Incus) provisionInstance(ctx context.Context, full string) error {
 		if err := i.pushFile(full, "/root/.ssh/authorized_keys", keyData, 0o600); err != nil {
 			return fmt.Errorf("writing root authorized_keys: %w", err)
 		}
-		if err := i.pushFileOwned(full, "/home/pixel/.ssh/authorized_keys", keyData, 0o600, 1000, 1000); err != nil {
+		if err := i.pushFileOwned(full, "/home/pixel/.ssh/authorized_keys", keyData, 0o600, int64(i.cfg.uid), int64(i.cfg.gid)); err != nil {
 			return fmt.Errorf("writing pixel authorized_keys: %w", err)
 		}
 	}
 
 	// Dev tools script.
 	if i.cfg.devtools {
+		if err := i.pushFileOwned(full, "/home/pixel/.config/mise/config.toml", []byte(scripts.MiseToml), 0o644, int64(i.cfg.uid), int64(i.cfg.gid)); err != nil {
+			return fmt.Errorf("writing mise config: %w", err)
+		}
 		if err := i.pushFile(full, "/usr/local/bin/pixels-setup-devtools.sh", []byte(scripts.SetupDevtools), 0o755); err != nil {
 			return fmt.Errorf("writing devtools script: %w", err)
 		}

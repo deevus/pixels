@@ -13,6 +13,7 @@ import (
 
 	"github.com/deevus/pixels/internal/egress"
 	"github.com/deevus/pixels/internal/scripts"
+	"github.com/deevus/pixels/sandbox/user"
 )
 
 // Client wraps a truenas-go WebSocket client and its typed services.
@@ -191,12 +192,13 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 		}); err != nil {
 			return fmt.Errorf("writing authorized_keys: %w", err)
 		}
-		pixelUID := intPtr(1000)
+		pixelUID := intPtr(user.UID)
+		pixelGID := intPtr(user.GID)
 		if err := c.Filesystem.WriteFile(ctx, rootfs+"/home/pixel/.ssh/authorized_keys", truenas.WriteFileParams{
 			Content: keyData,
 			Mode:    0o600,
 			UID:     pixelUID,
-			GID:     pixelUID,
+			GID:     pixelGID,
 		}); err != nil {
 			return fmt.Errorf("writing authorized_keys: %w", err)
 		}
@@ -205,6 +207,15 @@ func (c *Client) Provision(ctx context.Context, name string, opts ProvisionOpts)
 
 	// Write dev tools setup script (executed later via zmx).
 	if opts.DevTools {
+		if err := c.Filesystem.WriteFile(ctx, rootfs+"/home/pixel/.config/mise/config.toml", truenas.WriteFileParams{
+			Content: []byte(scripts.MiseToml),
+			Mode:    0o644,
+			UID:     intPtr(user.UID),
+			GID:     intPtr(user.GID),
+		}); err != nil {
+			return fmt.Errorf("writing mise config: %w", err)
+		}
+
 		if err := c.Filesystem.WriteFile(ctx, rootfs+"/usr/local/bin/pixels-setup-devtools.sh", truenas.WriteFileParams{
 			Content: []byte(scripts.SetupDevtools),
 			Mode:    0o755,
@@ -509,12 +520,13 @@ func (c *Client) WriteAuthorizedKey(ctx context.Context, name, sshPubKey string)
 		return fmt.Errorf("writing root authorized_keys: %w", err)
 	}
 
-	pixelUID := intPtr(1000)
+	pixelUID := intPtr(user.UID)
+	pixelGID := intPtr(user.GID)
 	if err := c.Filesystem.WriteFile(ctx, rootfs+"/home/pixel/.ssh/authorized_keys", truenas.WriteFileParams{
 		Content: keyData,
 		Mode:    0o600,
 		UID:     pixelUID,
-		GID:     pixelUID,
+		GID:     pixelGID,
 	}); err != nil {
 		return fmt.Errorf("writing pixel authorized_keys: %w", err)
 	}
