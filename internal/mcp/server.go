@@ -46,12 +46,11 @@ func NewServer(opts ServerOpts, endpointPath string) (http.Handler, *Tools) {
 		ExecTimeoutMax: opts.ExecTimeoutMax,
 		Log:            log,
 		Locks:          locks,
+		DaemonCtx:      opts.DaemonCtx,
+		Cfg:            opts.Cfg,
+		Builder:        opts.Builder,
+		BuildLockDir:   opts.BuildLockDir,
 	}
-
-	tools.DaemonCtx = opts.DaemonCtx
-	tools.Cfg = opts.Cfg
-	tools.Builder = opts.Builder
-	tools.BuildLockDir = opts.BuildLockDir
 
 	srv := sdk.NewServer(&sdk.Implementation{Name: "pixels-mcp", Version: "0.1.0"}, nil)
 
