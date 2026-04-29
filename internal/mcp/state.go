@@ -11,6 +11,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/google/renameio/v2"
 )
 
 // Sandbox is a single tracked MCP-managed sandbox.
@@ -140,10 +142,9 @@ func (s *State) SetStatus(name, status string) {
 	s.update(name, func(sb *Sandbox) { sb.Status = status })
 }
 
-// Save persists state atomically: write to <path>.tmp with fsync, then rename.
-// Without the fsync, a crash after rename can leave state.json zero-length on
-// ext4/xfs default mount options. On-disk sandbox order is non-deterministic
-// across saves (map iteration order).
+// Save persists state atomically via renameio: a crash mid-save leaves either
+// the previous contents or the new contents, never zero-length. On-disk
+// sandbox order is non-deterministic across saves (map iteration order).
 func (s *State) Save() error {
 	s.mu.RLock()
 	data := stateData{Sandboxes: slices.Collect(maps.Values(s.sandboxes))}
@@ -153,37 +154,12 @@ func (s *State) Save() error {
 		return fmt.Errorf("marshal state: %w", err)
 	}
 
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 
-	tmp := s.path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return fmt.Errorf("open tmp state: %w", err)
-	}
-	if _, err := f.Write(b); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("write tmp state: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmp)
-		return fmt.Errorf("sync tmp state: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("close tmp state: %w", err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		return fmt.Errorf("rename state: %w", err)
-	}
-	// Best-effort: fsync the parent dir so the rename itself is durable.
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
+	if err := renameio.WriteFile(s.path, b, 0o600); err != nil {
+		return fmt.Errorf("write state: %w", err)
 	}
 	return nil
 }

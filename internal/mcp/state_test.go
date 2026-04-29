@@ -96,8 +96,14 @@ func TestStateSaveAtomicNoTmpLeft(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
-		t.Errorf("tmp file should not exist after successful save")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "state.json" {
+			t.Errorf("unexpected leftover file in state dir: %q", e.Name())
+		}
 	}
 }
 

@@ -10,6 +10,7 @@ require (
 	github.com/deevus/truenas-go v0.5.0
 	github.com/dustin/go-humanize v1.0.1
 	github.com/gofrs/flock v0.13.0
+	github.com/google/renameio/v2 v2.0.2
 	github.com/gorilla/websocket v1.5.3
 	github.com/lxc/incus/v6 v6.22.0
 	github.com/modelcontextprotocol/go-sdk v1.5.0
