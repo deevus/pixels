@@ -50,7 +50,7 @@ func (t *TrueNAS) Run(ctx context.Context, name string, opts sandbox.ExecOpts) (
 		return 0, nil
 	}
 
-	return ssh.Exec(ctx, cc, opts.Cmd)
+	return t.ssh.Exec(ctx, cc, opts.Cmd)
 }
 
 // Output executes a command and returns its combined stdout.
@@ -119,7 +119,7 @@ func (t *TrueNAS) Ready(ctx context.Context, name string, timeout time.Duration)
 
 	// Test key auth and push the key if it fails.
 	cc := ssh.NewConnConfig(host, t.cfg.sshUser, t.cfg.sshKey, t.cfg.knownHosts)
-	if err := ssh.TestAuth(ctx, cc); err != nil {
+	if err := t.ssh.TestAuth(ctx, cc); err != nil {
 		pubKey := readSSHPubKey(t.cfg.sshKey)
 		if pubKey == "" {
 			return fmt.Errorf("SSH key auth failed and no public key at %s.pub", t.cfg.sshKey)
