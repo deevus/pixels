@@ -284,8 +284,7 @@ func (t *Tools) provisionFromImage(ctx context.Context, name string, in CreateSa
 		image = t.DefaultImage
 	}
 
-	inst, err := t.Backend.Create(ctx, sandbox.CreateOpts{Name: name, Image: image})
-	if err != nil {
+	if _, err := t.Backend.Create(ctx, sandbox.CreateOpts{Name: name, Image: image}); err != nil {
 		t.log().Error("create failed", "name", name, "err", err)
 		t.State.MarkFailed(name, err)
 		_ = t.persist()
@@ -299,7 +298,14 @@ func (t *Tools) provisionFromImage(ctx context.Context, name string, in CreateSa
 		return
 	}
 
-	if len(inst.Addresses) > 0 {
+	t.finalizeProvisioning(ctx, name)
+	t.log().Info("provisioning complete", "name", name)
+}
+
+// finalizeProvisioning records a successful provision: best-effort IP capture,
+// running state, activity bump, and persist (skipped if ctx was cancelled).
+func (t *Tools) finalizeProvisioning(ctx context.Context, name string) {
+	if inst, err := t.Backend.Get(ctx, name); err == nil && len(inst.Addresses) > 0 {
 		t.State.SetIP(name, inst.Addresses[0])
 	}
 	t.State.MarkRunning(name)
@@ -307,7 +313,6 @@ func (t *Tools) provisionFromImage(ctx context.Context, name string, in CreateSa
 	if ctx.Err() == nil {
 		_ = t.persist()
 	}
-	t.log().Info("provisioning complete", "name", name)
 }
 
 func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSandboxIn) {
@@ -352,11 +357,7 @@ func (t *Tools) provisionFromBase(ctx context.Context, name string, in CreateSan
 		return
 	}
 
-	if inst, err := t.Backend.Get(ctx, name); err == nil && len(inst.Addresses) > 0 {
-		t.State.SetIP(name, inst.Addresses[0])
-	}
-	t.State.MarkRunning(name)
-	t.touch(name)
+	t.finalizeProvisioning(ctx, name)
 }
 
 
