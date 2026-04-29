@@ -58,6 +58,14 @@ func (m *mockSSH) OutputQuiet(ctx context.Context, cc ssh.ConnConfig, cmd []stri
 	return nil, nil
 }
 
+// probeOK returns an outputFn that satisfies Ready()'s smoke probe by
+// returning a non-empty `id`-style line for any call.
+func probeOK() func(ctx context.Context, cc ssh.ConnConfig, cmd []string) ([]byte, error) {
+	return func(ctx context.Context, cc ssh.ConnConfig, cmd []string) ([]byte, error) {
+		return []byte("uid=1000(pixel) gid=1000(pixel)\n"), nil
+	}
+}
+
 func (m *mockSSH) WaitReady(ctx context.Context, host string, timeout time.Duration, log io.Writer) error {
 	m.waitCalls = append(m.waitCalls, host)
 	if m.waitFn != nil {

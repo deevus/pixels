@@ -672,7 +672,7 @@ func TestWriteFile(t *testing.T) {
 
 func TestReady(t *testing.T) {
 	t.Run("happy path: RUNNING with IP, auth ok", func(t *testing.T) {
-		mssh := &mockSSH{}
+		mssh := &mockSSH{outputFn: probeOK()}
 		tn, _ := NewForTest(&Client{
 			Virt: &tnapi.MockVirtService{
 				GetInstanceFunc: runningInstanceFunc("10.0.0.5"),
@@ -692,7 +692,7 @@ func TestReady(t *testing.T) {
 	})
 
 	t.Run("polls until RUNNING with IP", func(t *testing.T) {
-		mssh := &mockSSH{}
+		mssh := &mockSSH{outputFn: probeOK()}
 		var calls int
 		tn, _ := NewForTest(&Client{
 			Virt: &tnapi.MockVirtService{
@@ -728,6 +728,7 @@ func TestReady(t *testing.T) {
 			testAuthFn: func(ctx context.Context, cc ssh.ConnConfig) error {
 				return errors.New("permission denied")
 			},
+			outputFn: probeOK(),
 		}
 
 		dir := t.TempDir()
@@ -785,6 +786,77 @@ func TestReady(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "no public key") {
 			t.Errorf("error %q should mention missing public key", err.Error())
+		}
+	})
+
+	t.Run("readiness probe runs systemctl + id in one ssh call", func(t *testing.T) {
+		mssh := &mockSSH{outputFn: probeOK()}
+		tn, _ := NewForTest(&Client{
+			Virt: &tnapi.MockVirtService{
+				GetInstanceFunc: runningInstanceFunc("10.0.0.5"),
+			},
+		}, mssh, testCfg())
+
+		if err := tn.Ready(context.Background(), "test", 5*time.Second); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(mssh.outputCalls) != 1 {
+			t.Fatalf("expected exactly one OutputQuiet call (single readiness probe); got %d", len(mssh.outputCalls))
+		}
+		probe := mssh.outputCalls[0]
+		if probe.User != "pixel" {
+			t.Errorf("probe user = %q, want pixel", probe.User)
+		}
+		if probe.Host != "px-test" {
+			t.Errorf("probe host = %q, want px-test", probe.Host)
+		}
+		if len(probe.Cmd) != 1 || !strings.Contains(probe.Cmd[0], "systemctl is-system-running --wait") {
+			t.Errorf("probe cmd = %v, want systemctl is-system-running --wait + id", probe.Cmd)
+		}
+		if !strings.Contains(probe.Cmd[0], "; id") {
+			t.Errorf("probe cmd = %v, missing trailing `id`", probe.Cmd)
+		}
+	})
+
+	t.Run("readiness probe empty output returns error", func(t *testing.T) {
+		mssh := &mockSSH{
+			outputFn: func(ctx context.Context, cc ssh.ConnConfig, cmd []string) ([]byte, error) {
+				return []byte(""), nil
+			},
+		}
+		tn, _ := NewForTest(&Client{
+			Virt: &tnapi.MockVirtService{
+				GetInstanceFunc: runningInstanceFunc("10.0.0.5"),
+			},
+		}, mssh, testCfg())
+
+		err := tn.Ready(context.Background(), "test", 5*time.Second)
+		if err == nil {
+			t.Fatal("expected error when readiness probe returns empty output")
+		}
+		if !strings.Contains(err.Error(), "empty output") {
+			t.Errorf("error %q should mention empty output", err.Error())
+		}
+	})
+
+	t.Run("readiness probe surfaces ssh error", func(t *testing.T) {
+		mssh := &mockSSH{
+			outputFn: func(ctx context.Context, cc ssh.ConnConfig, cmd []string) ([]byte, error) {
+				return nil, errors.New("connection reset")
+			},
+		}
+		tn, _ := NewForTest(&Client{
+			Virt: &tnapi.MockVirtService{
+				GetInstanceFunc: runningInstanceFunc("10.0.0.5"),
+			},
+		}, mssh, testCfg())
+
+		err := tn.Ready(context.Background(), "test", 5*time.Second)
+		if err == nil {
+			t.Fatal("expected ssh error to propagate")
+		}
+		if !strings.Contains(err.Error(), "connection reset") {
+			t.Errorf("error %q should wrap the ssh error", err.Error())
 		}
 	})
 
