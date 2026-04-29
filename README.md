@@ -295,6 +295,25 @@ Create `~/.config/pixels/config.toml`:
 #
 # Session-only literal — passed to console/exec but NOT written to /etc/environment:
 # MY_VAR = { value = "some-value", session_only = true }
+
+[mcp]
+# prefix = "mcp-"               # name prefix for MCP-spawned sandboxes (final: px-mcp-<hex>)
+# base_prefix = "base-"         # name prefix for bases (final: px-base-<name>)
+# default_image = ""            # falls back to defaults.image when empty
+# listen_addr = "127.0.0.1:8765"
+# endpoint_path = "/mcp"
+# idle_stop_after = "1h"        # stop sandboxes idle for this long
+# hard_destroy_after = "24h"    # destroy sandboxes older than this
+# reap_interval = "1m"          # how often the reaper checks lifetimes
+# exec_timeout_max = "10m"      # ceiling for any single MCP exec call
+# state_file = ""               # default: $XDG_CACHE_HOME/pixels/mcp-state.json
+# pid_file = ""                 # default: $XDG_CACHE_HOME/pixels/mcp.pid
+
+# Declare extra bases (dev/python/node ship built in):
+# [mcp.bases.rust]
+# parent_image = "ubuntu/24.04"
+# setup_script = "~/.config/pixels/bases/rust.sh"
+# description  = "Rust toolchain"
 ```
 
 ### Priority Order
@@ -327,8 +346,27 @@ Create `~/.config/pixels/config.toml`:
 | `PIXELS_PROVISION_ENABLED` | `provision.enabled` |
 | `PIXELS_PROVISION_DEVTOOLS` | `provision.devtools` |
 | `PIXELS_NETWORK_EGRESS` | `network.egress` |
+| `PIXELS_MCP_PREFIX` | `mcp.prefix` |
+| `PIXELS_MCP_BASE_PREFIX` | `mcp.base_prefix` |
+| `PIXELS_MCP_DEFAULT_IMAGE` | `mcp.default_image` |
+| `PIXELS_MCP_LISTEN_ADDR` | `mcp.listen_addr` |
+| `PIXELS_MCP_ENDPOINT_PATH` | `mcp.endpoint_path` |
+| `PIXELS_MCP_IDLE_STOP_AFTER` | `mcp.idle_stop_after` |
+| `PIXELS_MCP_HARD_DESTROY_AFTER` | `mcp.hard_destroy_after` |
+| `PIXELS_MCP_REAP_INTERVAL` | `mcp.reap_interval` |
+| `PIXELS_MCP_EXEC_TIMEOUT_MAX` | `mcp.exec_timeout_max` |
+| `PIXELS_MCP_STATE_FILE` | `mcp.state_file` |
+| `PIXELS_MCP_PID_FILE` | `mcp.pid_file` |
 
 ## Using `pixels` as an MCP code-sandbox server
+
+> **Alpha.** Lifecycle and the tool surface are stable enough to build
+> against. Sandbox security for the MCP path is not yet aligned with
+> `pixels create`: sandboxes don't get per-call egress policies, and
+> base clones inherit whatever was baked in at build time. Egress
+> and the rest of the `pixels create` hardening are coming soon.
+> For now, I'd treat an MCP-spawned sandbox as if you'd run
+> `pixels create --egress unrestricted`.
 
 `pixels mcp` runs a streamable-HTTP MCP server that exposes container
 lifecycle, exec, and file CRUD as MCP tools. Run it once on your
@@ -341,6 +379,12 @@ machine, then point any number of MCP clients at it.
 By default it binds to `http://127.0.0.1:8765/mcp` and refuses to start
 if another instance is already running (PID file at
 `~/.cache/pixels/mcp.pid`).
+
+The server has no auth. Keep it on loopback, or put it behind a
+reverse proxy (Caddy, nginx, Traefik) that handles auth for you.
+If you bind it to a non-loopback address with no proxy in front,
+anything that can reach the port can run `exec` in any of your
+sandboxes.
 
 ### Configure your client
 
@@ -369,6 +413,20 @@ Claude Code MCP entry:
 | `edit_file` | Replace `old_string` with `new_string` (with optional `replace_all`) |
 | `delete_file` | Remove a file |
 | `list_files` | List directory contents (optionally recursive) |
+
+### Container names
+
+Both backends prepend `px-` to every instance. The MCP daemon
+prepends its own prefix on top of that, so:
+
+- MCP-spawned sandboxes land at `px-mcp-<hex>` (`mcp.prefix` default
+  is `mcp-`).
+- Bases land at `px-base-<name>` (`mcp.base_prefix` default is
+  `base-`).
+
+That's why CLI examples like `pixels checkpoint create px-base-python`
+use the full on-disk name. `create_sandbox` returns the full name in
+its response.
 
 ### Base pixels
 
@@ -402,6 +460,11 @@ description  = "Rust toolchain + dev tools"
 Bases form a DAG via `from`. Cycle / missing-dep / both-set / neither-set
 are rejected at config load.
 
+**Setup scripts run as root with the `pixels create` hardening absent.**
+I treat them like Docker `RUN` lines: only build a base from a script
+you wrote or reviewed. The egress, `safe-apt`, and restricted-sudoers
+wiring from `pixels create` isn't applied during base build.
+
 Customise a base by mutating its container:
 
 ```bash
@@ -414,11 +477,13 @@ pixels checkpoint create px-base-python
 The next `create_sandbox(base="python")` call clones from the new
 checkpoint. Existing sandboxes are unaffected (independent containers).
 
-**Checkpoint-advances-clone-source.** Any `pixels checkpoint create px-base-X`
-immediately advances the snapshot that future sandboxes clone from. If you take
-a *safety* checkpoint before mutating, new sandboxes will clone from that
-pre-mutation state until you take another checkpoint *after* the changes. Always
-re-checkpoint after mutating to ensure new clones pick up your changes.
+**Checkpoint-advances-clone-source.** Future sandboxes clone from the
+most recent checkpoint by creation time, not by label. So any
+`pixels checkpoint create px-base-X` immediately advances the clone
+source. If you take a *safety* checkpoint before mutating, new sandboxes
+clone from that pre-mutation state until you take another checkpoint
+*after* the changes. Always re-checkpoint after mutating to ensure new
+clones pick up your changes.
 
 **Mutation-propagation gotcha.** Changes to `dev` do NOT auto-flow into
 `python` or `node`. Both are independent containers built when `dev` was
