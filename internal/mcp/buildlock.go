@@ -5,13 +5,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"golang.org/x/sys/unix"
+	"github.com/gofrs/flock"
 )
 
 // BuildLock is a file-level exclusive lock for serialising base builds
 // across the daemon and CLI processes.
 type BuildLock struct {
-	f *os.File
+	lock *flock.Flock
 }
 
 // AcquireBuildLock takes an exclusive flock on <dir>/builds/<name>.lock.
@@ -22,23 +22,18 @@ func AcquireBuildLock(dir, name string) (*BuildLock, error) {
 		return nil, fmt.Errorf("create build lock dir: %w", err)
 	}
 	path := filepath.Join(lockDir, name+".lock")
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("open build lock %s: %w", path, err)
-	}
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
-		f.Close()
+	lock := flock.New(path)
+	if err := lock.Lock(); err != nil {
 		return nil, fmt.Errorf("flock %s: %w", path, err)
 	}
-	return &BuildLock{f: f}, nil
+	return &BuildLock{lock: lock}, nil
 }
 
 // Release drops the file lock. Safe to call multiple times.
 func (l *BuildLock) Release() {
-	if l.f == nil {
+	if l.lock == nil {
 		return
 	}
-	_ = unix.Flock(int(l.f.Fd()), unix.LOCK_UN)
-	_ = l.f.Close()
-	l.f = nil
+	_ = l.lock.Unlock()
+	l.lock = nil
 }
