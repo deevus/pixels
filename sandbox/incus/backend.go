@@ -468,7 +468,10 @@ func (i *Incus) RestoreSnapshot(ctx context.Context, name, label string) error {
 	return nil
 }
 
-// CloneFrom copies an instance from a source snapshot into a new instance.
+// CloneFrom copies an instance from a source snapshot into a new instance,
+// then starts it. Volatile keys (notably volatile.eth0.hwaddr) are stripped
+// so Incus regenerates them on the destination — otherwise the clone would
+// boot with a duplicate MAC and fail eth0 validation.
 func (i *Incus) CloneFrom(ctx context.Context, source, label, newName string) error {
 	sourceFull := prefixed(source)
 	newFull := prefixed(newName)
@@ -477,6 +480,15 @@ func (i *Incus) CloneFrom(ctx context.Context, source, label, newName string) er
 	sourceInst, _, err := i.server.GetInstance(sourceFull)
 	if err != nil {
 		return fmt.Errorf("getting source instance: %w", err)
+	}
+
+	// Strip volatile.* keys: these encode per-instance identity (MAC, idmap,
+	// last_state, etc.) and must not survive into the clone. Matches the
+	// behaviour of the `incus copy` CLI.
+	for k := range sourceInst.Config {
+		if strings.HasPrefix(k, "volatile.") {
+			delete(sourceInst.Config, k)
+		}
 	}
 
 	// Copy from snapshot.
@@ -490,6 +502,13 @@ func (i *Incus) CloneFrom(ctx context.Context, source, label, newName string) er
 	}
 	if err := op.Wait(); err != nil {
 		return fmt.Errorf("waiting for copy: %w", err)
+	}
+
+	// Callers (BuildBase, create_sandbox) expect a clone to be running on
+	// return — Ready polls for state.Running. Match the TrueNAS backend and
+	// the post-Create flow above.
+	if err := i.Start(ctx, newName); err != nil {
+		return fmt.Errorf("starting clone: %w", err)
 	}
 
 	return nil
