@@ -74,15 +74,19 @@ func runBaseList(cmd *cobra.Command, args []string) error {
 		}
 
 		var status, lastChk string
-		// Check container existence.
+		// A base is "ready" iff the initial checkpoint exists — that's what
+		// sandboxes clone from. A bare container with no checkpoint means
+		// the build crashed mid-way (e.g. setup script failure, daemon
+		// killed before snapshot) and the container needs to be deleted
+		// and rebuilt.
 		_, err := sb.Get(context.Background(), container)
 		if err != nil {
 			status = "missing"
-		} else {
+		} else if latest, ok, lerr := mcppkg.LatestCheckpointFor(context.Background(), sb, container); lerr == nil && ok {
 			status = "ready"
-			if latest, ok, err := mcppkg.LatestCheckpointFor(context.Background(), sb, container); err == nil && ok {
-				lastChk = latest.CreatedAt.UTC().Format("2006-01-02 15:04:05Z")
-			}
+			lastChk = latest.CreatedAt.UTC().Format("2006-01-02 15:04:05Z")
+		} else {
+			status = "incomplete"
 		}
 
 		// Check for cached build failures in the on-disk state.
